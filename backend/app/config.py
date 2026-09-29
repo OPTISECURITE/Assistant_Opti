@@ -59,3 +59,8 @@ WEB_PAGE_CHARS = int(os.getenv("OPTI_WEB_PAGE_CHARS", "3500"))
 # Lecture des PDF
 MAX_PDF_PAGES = int(os.getenv("OPTI_MAX_PDF_PAGES", "300"))   # pages lues au maximum par PDF
 PDF_TIMEOUT = int(os.getenv("OPTI_PDF_TIMEOUT", "300"))       # durée maximale de lecture d'un PDF (OCR compris)
+
+# Lecture complète des documents longs (synthèse / relevé exhaustif) : contexte plus large, historique réduit
+DOC_FULL_BUDGET = int(os.getenv("OPTI_DOC_FULL_BUDGET", "28000"))
+HISTORY_FULL_BUDGET = int(os.getenv("OPTI_HISTORY_FULL_BUDGET", "6000"))
+MAX_SECTIONS = int(os.getenv("OPTI_MAX_SECTIONS", "120"))   # sections lues au maximum par document

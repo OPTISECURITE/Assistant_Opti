@@ -54,7 +54,7 @@ def file_meta(f: File) -> dict:
 def file_summary(f: File) -> dict:
     d = {"id": f.id, "filename": f.filename, "kind": f.kind, "size": f.size}
     m = file_meta(f)
-    for key in ("pages", "ocr_pages", "truncated"):
+    for key in ("pages", "ocr_pages", "truncated", "unread", "basic"):
         if m.get(key):
             d[key] = m[key]
     return d
@@ -99,8 +99,9 @@ async def read_pdf(path: Path, stored_name: str, app) -> tuple[str, dict]:
     """Texte d'un PDF avec marqueurs [Page N], tableaux en Markdown, OCR des pages scannées."""
     async with _pdf_slots:
         try:
+            timeout = min(900, max(config.PDF_TIMEOUT, 60 + 5 * app.max_ocr_pages))   # l'OCR de nombreuses pages est long
             r = await sandbox.extract_pdf(path, stored_name, ocr=app.ocr_enabled, max_ocr=app.max_ocr_pages,
-                                          max_pages=config.MAX_PDF_PAGES, timeout=config.PDF_TIMEOUT)
+                                          max_pages=config.MAX_PDF_PAGES, timeout=timeout)
         except Exception as e:
             # Repli (image du bac à sable ancienne ou indisponible) : lecture simple, sans tableaux ni OCR.
             log.warning("Lecture du PDF dans le bac à sable impossible (%s) : lecture de secours", str(e)[-200:])
@@ -109,9 +110,9 @@ async def read_pdf(path: Path, stored_name: str, app) -> tuple[str, dict]:
 
     pages = [p for p in r["pages"] if p["text"].strip()]
     text = "\n\n".join(f"[Page {p['n']}]\n{p['text']}" for p in pages)
-    unread = max(0, len(r["weak"]) - r["ocr_done"])
-    meta = {"pages": r["total"], "ocr_pages": r["ocr_done"], "truncated": r["truncated"],
-            "tables": sum(p["tables"] for p in r["pages"]), "scanned_unread": unread}
+    unread = r.get("unread", max(0, len(r["weak"]) - r["ocr_done"]))
+    meta = {"pages": r["total"], "read_pages": len(r["pages"]), "ocr_pages": r["ocr_done"], "truncated": r["truncated"],
+            "tables": sum(p["tables"] for p in r["pages"]), "unread": unread}
     if not text.strip():
         if r["weak"] and not app.ocr_enabled:
             raise HTTPException(422, "Ce PDF est un scan (pages en images) et la reconnaissance de texte (OCR) est désactivée par l'administrateur.")

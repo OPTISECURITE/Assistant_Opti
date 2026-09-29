@@ -126,6 +126,9 @@
             ${choices('tone', [['neutre', 'Neutre'], ['cordial', 'Cordial'], ['formel', 'Formel'], ['direct', 'Direct']], p.tone)}</section>
           <section><h3>Longueur des réponses</h3>
             ${choices('length', [['courte', 'Courtes'], ['equilibree', 'Équilibrées'], ['detaillee', 'Détaillées']], p.length)}</section>
+          <section><h3>Documents longs</h3>
+            <p class="op-hint">Un document trop long pour tenir d’un coup est lu par morceaux. En mode <b>Automatique</b>, l’assistant choisit : quelques passages pour une question précise, une lecture complète pour un résumé ou une question qui porte sur tout le document. En mode <b>Toujours tout lire</b>, chaque question relit le document en entier : plus complet, mais plus long (comptez de quelques dizaines de secondes à plusieurs minutes selon la taille). Vous pouvez aussi écrire « lis tout le document » dans votre message.</p>
+            ${choices('doc_mode', [['auto', 'Automatique'], ['full', 'Toujours tout lire']], p.doc_mode)}</section>
           <section><h3>Instructions personnelles</h3>
             <p class="op-hint">Ce que l’assistant doit savoir sur vous ou sur votre façon de travailler. Exemple : « Je suis technicien de maintenance, donne-moi des étapes numérotées. »</p>
             <textarea id="op-instructions" rows="6" maxlength="2000"></textarea>
@@ -136,7 +139,7 @@
         ta.addEventListener('input', count);
         count();
         pane.querySelector('#op-save-instr').addEventListener('click', () => O.savePrefs({ instructions: ta.value.trim() }));
-        ['tone', 'length'].forEach((name) => pane.querySelectorAll(`input[name=${name}]`)
+        ['tone', 'length', 'doc_mode'].forEach((name) => pane.querySelectorAll(`input[name=${name}]`)
           .forEach((r) => r.addEventListener('change', () => O.savePrefs({ [name]: r.value }))));
       },
     },
@@ -375,7 +378,7 @@
           <div class="op-field"><label for="f-max">Taille maximale (Mo)</label><input type="number" id="f-max" min="1" max="100"></div>
           <div class="op-field"><label for="a-steps">Essais de calcul par question</label><input type="number" id="a-steps" min="1" max="5"></div>
           <div class="op-field"><label for="a-timeout">Durée maximale d’un calcul (s)</label><input type="number" id="a-timeout" min="10" max="300"></div>
-          <div class="op-field"><label for="ocr-max">Pages scannées lues par PDF (OCR)</label><input type="number" id="ocr-max" min="1" max="200"></div>
+          <div class="op-field"><label for="ocr-max">Pages scannées lues par PDF (OCR)</label><input type="number" id="ocr-max" min="1" max="300"></div>
         </div></section>
       <div class="op-pane-actions"><button type="button" class="op-primary" id="x-save">Enregistrer</button></div>`;
     const $p = (s) => pane.querySelector(s);

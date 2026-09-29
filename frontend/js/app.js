@@ -22,7 +22,7 @@
     pending: [],        // pièces jointes en attente d'envoi : { id?, filename, kind, uploading }
     webForced: false,   // bouton globe : recherche forcée pour les prochains messages
     follow: true,       // suivre la réponse en bas de l'écran (désactivé si l'utilisateur remonte)
-    prefs: { tone: 'neutre', length: 'equilibree', instructions: '', text_size: 'normal', send_key: 'enter', web_mode: 'auto' },
+    prefs: { tone: 'neutre', length: 'equilibree', instructions: '', text_size: 'normal', send_key: 'enter', web_mode: 'auto', doc_mode: 'auto' },
   };
 
   // ── Utilitaires ───────────────────────────────────────────────────────────
@@ -32,40 +32,52 @@
   const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text || ''));
 
   // Affiche une réponse : Markdown + regroupement « code exécuté / résultat » dans un encart repliable
-  // Encart affiché quand un document long est lu : progression, puis pages retrouvées
+  // Encart affiché quand un document est lu : progression, puis couverture (pages lues, avertissements)
   function readingCard(pre) {
     const info = {};
     pre.textContent.split('\n').forEach((line) => { try { Object.assign(info, JSON.parse(line)); } catch {} });
     const running = info.status !== 'done';
+    const docs = info.docs || [];
     const card = document.createElement('div');
     card.className = 'op-sources' + (running ? ' is-running' : '');
     const head = document.createElement('div');
     head.className = 'op-sources-head';
     head.innerHTML = `<i data-lucide="${running ? 'loader-circle' : 'file-search'}"></i><span></span><em></em>`;
     const label = head.querySelector('span'), sub = head.querySelector('em');
-    const docs = info.docs || [];
     if (running) {
-      label.textContent = 'Lecture du document en cours…';
-      if (info.total) sub.textContent = `section ${Math.min((info.done || 0) + 1, info.total)} sur ${info.total} · ${info.doc || ''}`;
-    } else {
-      label.textContent = docs.some((d) => d.mode === 'synthese') ? 'Document lu en entier · synthèse par sections' : 'Passages du document retrouvés';
-    }
+      const merging = info.phase === 'condensation';
+      label.textContent = merging ? 'Assemblage des notes de lecture…' : 'Lecture complète du document en cours…';
+      if (info.total) sub.textContent = `${info.done || 0} / ${info.total} ${merging ? 'groupes' : 'sections'}${info.doc ? ' · ' + info.doc : ''}`;
+    } else if (docs.some((d) => d.mode === 'synthese')) label.textContent = 'Document lu en entier · notes de lecture par section';
+    else if (docs.some((d) => d.mode === 'exhaustif')) label.textContent = 'Document relu en entier · relevé sur toutes les sections';
+    else if (docs.some((d) => d.mode === 'extraits')) label.textContent = 'Passages du document retrouvés';
+    else label.textContent = 'Lecture du document';
     card.appendChild(head);
     if (!running && docs.length) {
       const list = document.createElement('ol');
       docs.forEach((d) => {
         const li = document.createElement('li');
         const row = document.createElement('div');
-        row.style.cssText = 'font-size:11px;padding:4px 6px;color:var(--op-muted)';
-        const pages = (d.pages || []);
+        row.style.cssText = 'font-size:11px;padding:4px 6px;color:var(--op-muted);line-height:1.6';
+        const pages = d.pages || [];
         const shown = pages.length > 12 ? pages.slice(0, 12).join(', ') + '…' : pages.join(', ');
-        const detail = d.mode === 'synthese' ? `${d.sections} sections résumées${d.total_pages ? ` · ${d.total_pages} pages` : ''}`
-          : d.matched === false ? 'aucun passage précis trouvé : début du document fourni'
-          : `pages ${shown}${d.total_pages ? ` sur ${d.total_pages}` : ''}`;
-        row.innerHTML = '<b style="color:var(--op-ink);font-weight:600"></b> — <span></span>';
+        const span = d.total_pages ? `pages 1 à ${d.read_pages || d.total_pages}` : '';
+        const detail = d.mode === 'synthese' ? `${d.sections} sections lues${span ? ' · ' + span : ''}${d.condensed ? ' · notes fusionnées' : ''}`
+          : d.mode === 'exhaustif' ? `${d.sections} sections analysées · ${d.hits} avec des éléments pertinents`
+          : d.mode === 'extraits' ? (d.matched === false ? 'aucun passage précis trouvé : début du document fourni'
+              : `pages ${shown}${d.total_pages ? ' sur ' + d.total_pages : ''} · pour tout lire, demandez une lecture complète`)
+          : '';
+        row.innerHTML = '<b style="color:var(--op-ink);font-weight:600"></b><span></span>';
         row.querySelector('b').textContent = d.name;
-        row.querySelector('span').textContent = detail;
+        row.querySelector('span').textContent = detail ? ' — ' + detail : '';
         li.appendChild(row);
+        const warns = [...(d.partial || []), ...(d.failed ? [`${d.failed} section(s) n’ont pas pu être analysées`] : [])];
+        warns.forEach((w) => {
+          const el = document.createElement('div');
+          el.className = 'op-warn';
+          el.textContent = '⚠ ' + w;
+          li.appendChild(el);
+        });
         list.appendChild(li);
       });
       card.appendChild(list);
@@ -532,18 +544,24 @@
     files.forEach((f, i) => {
       const chip = document.createElement('span');
       chip.className = 'op-chip' + (f.uploading ? ' is-uploading' : '');
-      const bits = [];
-      if (f.uploading) bits.push(/\.pdf$/i.test(f.filename) ? 'lecture…' : 'envoi…');
-      if (f.pages) bits.push(`${f.pages} p.`);
-      if (f.ocr_pages) bits.push('OCR');
-      if (f.size && !f.uploading) bits.push(fmtSize(f.size));
-      chip.innerHTML = `<i data-lucide="${fileIcon(f)}"></i><span></span>${bits.length ? `<small>${esc(bits.join(' · '))}</small>` : ''}` +
+      const bits = [];   // { t: texte, warn: alerte }
+      if (f.uploading) bits.push({ t: /\.pdf$/i.test(f.filename) ? 'lecture…' : 'envoi…' });
+      if (f.pages) bits.push({ t: `${f.pages} p.` });
+      if (f.ocr_pages) bits.push({ t: 'OCR' });
+      if (f.unread) bits.push({ t: `⚠ ${f.unread} p. non lue${f.unread > 1 ? 's' : ''}`, warn: true });
+      if (f.truncated) bits.push({ t: '⚠ tronqué', warn: true });
+      if (f.basic) bits.push({ t: '⚠ lecture simple', warn: true });
+      if (f.size && !f.uploading) bits.push({ t: fmtSize(f.size) });
+      chip.innerHTML = `<i data-lucide="${fileIcon(f)}"></i><span></span>` +
+        bits.map((b) => `<small${b.warn ? ' class="is-warn"' : ''}>${esc(b.t)}</small>`).join('') +
         (removable && !f.uploading ? `<button type="button" aria-label="Retirer le fichier" data-remove="${i}"><i data-lucide="x"></i></button>` : '');
       chip.querySelector('span').textContent = f.filename;
       chip.title = [f.filename,
         f.pages ? `${f.pages} page${f.pages > 1 ? 's' : ''}` : '',
         f.ocr_pages ? `${f.ocr_pages} page${f.ocr_pages > 1 ? 's' : ''} lue${f.ocr_pages > 1 ? 's' : ''} par reconnaissance de texte (OCR)` : '',
-        f.truncated ? 'lecture limitée aux premières pages' : ''].filter(Boolean).join(' · ');
+        f.unread ? `${f.unread} page${f.unread > 1 ? 's' : ''} scannée${f.unread > 1 ? 's' : ''} ou illisible${f.unread > 1 ? 's' : ''} non lue${f.unread > 1 ? 's' : ''}` : '',
+        f.truncated ? 'lecture limitée aux premières pages' : '',
+        f.basic ? 'lecture simple : tableaux et scans non pris en compte' : ''].filter(Boolean).join(' · ');
       box.appendChild(chip);
     });
     return box;

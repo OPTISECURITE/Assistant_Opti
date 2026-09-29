@@ -43,7 +43,8 @@ document ne contient pas la réponse, dis-le.
 
 
 def build_messages(chat: Chat, files: list[File], prefs: settings.UserPrefs | None = None,
-                   doc_context: str = "") -> list[dict]:
+                   doc_context: str = "", history_budget: int | None = None) -> list[dict]:
+    history_budget = history_budget or config.HISTORY_CHAR_BUDGET
     app = settings.app()
     data = [f for f in files if f.kind == "data"] if app.analysis_enabled else []
 
@@ -60,7 +61,7 @@ def build_messages(chat: Chat, files: list[File], prefs: settings.UserPrefs | No
     for m in reversed(chat.messages):
         if not m.content:
             continue
-        if used + len(m.content) > config.HISTORY_CHAR_BUDGET and history:
+        if used + len(m.content) > history_budget and history:
             break
         content = SEARCH_BLOCK.sub("", m.content) if m.role == "assistant" else m.content
         history.append({"role": m.role, "content": content})
@@ -75,15 +76,23 @@ async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIte
     """web_mode : 'auto' (le modèle décide), 'on' (recherche forcée), 'off' (jamais)."""
     app = settings.app()
 
-    # Documents : entiers s'ils sont courts, sinon passages pertinents ou synthèse (voir documents.py)
-    doc_context, blocks = "", []
+    # Documents : entiers s'ils sont courts, sinon lecture ciblée, synthèse ou relevé complet (voir documents.py)
+    prefs = settings.user_prefs(chat.owner_id)
+    doc_context, blocks, history_budget = "", [], None
     docs = [f for f in files if f.kind == "document"]
     if docs:
         user_msgs = [m.content for m in chat.messages if m.role == "user"]
         question = user_msgs[-1] if user_msgs else ""
         search_query = question if len(question) >= 30 or len(user_msgs) < 2 else user_msgs[-2] + " " + question
+        light_limit = max(3000, config.DOC_CHAR_BUDGET // len(docs))
+        mode = documents.EXTRAITS
+        if any(len(f.text) > light_limit for f in docs):          # au moins un document trop long pour tenir en entier
+            mode = await documents.decide_mode(question, documents.conversation_excerpt(chat.messages), prefs.doc_mode)
+        heavy = mode != documents.EXTRAITS
+        budget = config.DOC_FULL_BUDGET if heavy else config.DOC_CHAR_BUDGET
+        history_budget = config.HISTORY_FULL_BUDGET if heavy else None
         opened = False
-        async for kind, payload in documents.prepare(docs, search_query, documents.is_overview(question), config.DOC_CHAR_BUDGET):
+        async for kind, payload in documents.prepare(docs, search_query, question, mode, budget):
             if kind == "context":
                 doc_context = payload
                 continue
@@ -97,7 +106,7 @@ async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIte
         if opened:
             yield json.dumps({"status": "done", "docs": blocks}, ensure_ascii=False) + "\n```\n\n"
 
-    messages = build_messages(chat, files, settings.user_prefs(chat.owner_id), doc_context)
+    messages = build_messages(chat, files, prefs, doc_context, history_budget)
     if not app.web_enabled:
         web_mode = "off"
     if not app.analysis_enabled:

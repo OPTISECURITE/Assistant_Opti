@@ -56,8 +56,8 @@ async def stream_chat(messages: list[dict]) -> AsyncIterator[str]:
 
 def _error_message(raw: str) -> str:
     if "context" in raw and ("exceed" in raw or "size" in raw):
-        return ("\n\n> ⚠️ La conversation est devenue trop longue pour le modèle. "
-                "Démarrez une nouvelle conversation pour continuer.")
+        return ("\n\n> ⚠️ La conversation et les documents joints dépassent la capacité du modèle. "
+                "Démarrez une nouvelle conversation ou joignez moins de documents.")
     return "\n\n> ⚠️ Le modèle a renvoyé une erreur. Réessayez ou reformulez votre demande."
 
 

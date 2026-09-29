@@ -212,3 +212,7 @@
 #opti-design .op-pw-row { display: flex; gap: 8px; align-items: center; }
 #opti-design .op-pw-row input { flex: 1; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .3px; }
 #opti-design .op-pw-row .op-secondary { padding: 8px 14px; white-space: nowrap; }
+
+/* Alertes de lecture (pages non lues, sections en échec) */
+#opti-design .op-warn { font-size: 11px; color: #a86a12; background: color-mix(in srgb, #d9932b 12%, transparent); border-radius: 6px; padding: 5px 8px; margin: 3px 6px 5px; line-height: 1.5; }
+#opti-design .op-chip small.is-warn { color: #a86a12; font-weight: 600; }

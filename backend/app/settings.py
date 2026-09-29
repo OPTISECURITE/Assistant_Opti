@@ -34,7 +34,7 @@ class AppSettings(BaseModel):
     max_analysis_steps: int = Field(default=config.MAX_ANALYSIS_STEPS, ge=1, le=5)
     sandbox_timeout: int = Field(default=config.SANDBOX_TIMEOUT, ge=10, le=300)
     ocr_enabled: bool = True                                   # reconnaissance de texte des PDF scannés
-    max_ocr_pages: int = Field(default=40, ge=1, le=200)
+    max_ocr_pages: int = Field(default=100, ge=1, le=300)
 
 
 class UserPrefs(BaseModel):
@@ -44,6 +44,7 @@ class UserPrefs(BaseModel):
     text_size: Literal["normal", "grand", "tres-grand"] = "normal"
     send_key: Literal["enter", "ctrl-enter"] = "enter"
     web_mode: Literal["auto", "on", "off"] = "auto"
+    doc_mode: Literal["auto", "full"] = "auto"      # documents longs : automatique ou lecture complète à chaque question
 
 
 # ── Réglages globaux (mis en cache, relus après chaque modification) ──────────

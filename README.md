@@ -81,15 +81,28 @@ docker build -t opti-sandbox:2 deploy/sandbox
 venv/bin/python backend/manage.py test-sandbox     # les 5 contrôles d'isolation, la lecture PDF et l'OCR doivent être ✓
 ```
 
-## Lecture des PDF
+## Lecture des PDF et des documents longs
 
 Les PDF sont lus **dans le bac à sable** (jamais par l'application elle-même) : texte, tableaux à bordures
-(convertis en Markdown) et OCR automatique des pages scannées (tesseract, français + anglais).
+(convertis en Markdown) et OCR automatique des pages scannées, des pages-images avec en-tête texte et des pages au
+texte illisible (tesseract, français + anglais).
 
-- **Document court** (moins de ~24 000 caractères) : donné en entier au modèle.
-- **Document long, question précise** : passages les plus proches de la question (BM25) avec leurs pages ; le modèle cite les pages.
-- **Document long, demande globale** (« résume », « analyse ce document ») : synthèse section par section, mise en cache
-  dans `data/files/<id>/summary.json`.
+Un modèle ne peut pas lire 80 pages d'un coup (contexte de 16k tokens) : les documents longs sont lus par morceaux,
+puis assemblés. Le mode est choisi selon la question (`backend/app/documents.py`) :
 
-Réglages (Administration → Recherche & fichiers) : OCR on/off, pages scannées lues par PDF.
-Variables : `OPTI_MAX_PDF_PAGES` (300), `OPTI_PDF_TIMEOUT` (300 s).
+| Mode | Quand | Ce qui se passe |
+|---|---|---|
+| entier | document court (< ~24 000 caractères) | donné tel quel |
+| extraits | question précise (une valeur, une clause) | passages les plus pertinents (BM25) avec leurs pages |
+| synthèse | « résume », « explique ce document »… | **toutes** les sections sont lues (notes de 150 à 220 mots), fusionnées par niveaux si elles dépassent le contexte |
+| exhaustif | « liste tous… », « relève les risques »… | **chaque** section est relue avec la question en tête, puis les relevés sont assemblés |
+
+Le choix est fait par des mots-clés, puis par le modèle pour les formulations ambiguës. Le réglage utilisateur
+« Toujours tout lire » (Réglages → Réponses) force la lecture complète à chaque question.
+Les notes de la synthèse sont en cache dans `data/files/<id>/summary.json` (version 2).
+
+**Couverture** : tout ce qui n'a pas pu être lu (pages scannées au-delà de la limite d'OCR, texte illisible, limite de
+pages, section en échec) est signalé à l'utilisateur (pastille et encart d'alerte) et au modèle.
+
+Réglages (Administration → Recherche & fichiers) : OCR on/off, pages scannées lues par PDF (100 par défaut).
+Variables : `OPTI_MAX_PDF_PAGES` (300), `OPTI_PDF_TIMEOUT` (300 s), `OPTI_DOC_FULL_BUDGET` (28000), `OPTI_MAX_SECTIONS` (120).

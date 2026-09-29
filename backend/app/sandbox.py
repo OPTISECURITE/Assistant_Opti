@@ -165,7 +165,7 @@ async def profile_data_file(host_path: Path, stored_name: str) -> str:
 # bac à sable (sans réseau, lecture seule), car un PDF malveillant peut exploiter
 # les failles de ses lecteurs.
 PDF_EXTRACT_BODY = r"""
-import glob, json, logging, os, shutil, subprocess, tempfile
+import glob, json, logging, os, re, shutil, subprocess, tempfile
 logging.disable(logging.CRITICAL)
 import pdfplumber
 
@@ -207,12 +207,23 @@ with pdfplumber.open(PATH) as pdf:
                 text = (page.extract_text() or "").strip()
             except Exception:
                 text = ""
+        garbage = text.count("(cid:") >= 5           # police sans table de caractères : texte illisible
+        text = re.sub(r"\(cid:\d+\)", "", text).strip()
         body = text
         if tables:
             body += ("\n\n" if body else "") + "\n\n".join("[Tableau]\n" + t for t in tables)
         pages.append({"n": i, "text": body, "ocr": False, "tables": len(tables)})
-        if len(body) < MIN_TEXT and len(page.images) > 0:
-            weak.append(i)          # page image sans texte : scan probable
+        img_area = 0
+        try:
+            for im in page.images:
+                w = max(0, min(im["x1"], page.width) - max(im["x0"], 0))
+                h = max(0, min(im["bottom"], page.height) - max(im["top"], 0))
+                img_area += w * h
+        except Exception:
+            pass
+        mostly_image = img_area / ((page.width * page.height) or 1) > 0.5
+        if garbage or (len(body) < MIN_TEXT and len(page.images) > 0) or (mostly_image and len(body) < 300):
+            weak.append(i)          # scan probable, texte illisible ou page-image avec un simple en-tête
         page.flush_cache()
 
 ocr_available = bool(shutil.which("tesseract") and shutil.which("pdftoppm"))
@@ -231,13 +242,15 @@ if PARAMS["ocr"] and weak and ocr_available:
                 txt = r.stdout.decode("utf-8", "replace").strip()
             except Exception:
                 txt = ""
-        if txt:
+        old = pages[n - 1]["text"]
+        if txt and (len(txt) >= 0.8 * len(old) or len(old) < MIN_TEXT):
             pages[n - 1]["text"] = txt
             pages[n - 1]["ocr"] = True
             ocr_done += 1
+unread = [n for n in weak if not pages[n - 1]["ocr"] and len(pages[n - 1]["text"]) < 100]
 
 print("@@RESULT@@" + json.dumps({
-    "total": total, "pages": pages, "weak": weak, "ocr_done": ocr_done,
+    "total": total, "pages": pages, "weak": weak, "ocr_done": ocr_done, "unread": len(unread),
     "ocr_available": ocr_available, "truncated": total > PARAMS["max_pages"],
 }, ensure_ascii=False))
 """
