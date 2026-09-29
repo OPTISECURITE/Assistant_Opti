@@ -40,7 +40,8 @@
     `<label class="op-toggle"><span>${esc(label)}${hint ? `<small>${esc(hint)}</small>` : ''}</span><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}></label>`;
   const fmtDate = (ts) => (ts ? new Date(ts).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : 'jamais');
   const FIELD_NAMES = { password: 'Le mot de passe', username: 'L’identifiant', display_name: 'Le nom affiché',
-    system_prompt: 'La consigne système', model_label: 'Le nom affiché du modèle', searxng_url: 'L’adresse de SearXNG' };
+    system_prompt: 'La consigne système', model_label: 'Le nom affiché du modèle', searxng_url: 'L’adresse de SearXNG',
+    session_idle_minutes: 'Le délai d’inactivité', session_max_hours: 'La durée maximale de session' };
   const humanize = (d) => {
     const field = d.loc?.at(-1);
     const name = FIELD_NAMES[field] || `Le champ « ${field} »`;
@@ -195,6 +196,7 @@
     { label: 'Utilisateurs', icon: 'users', render: renderUsers },
     { label: 'Modèle', icon: 'cpu', render: renderModel },
     { label: 'Recherche & fichiers', icon: 'globe', render: renderFeatures },
+    { label: 'Sécurité', icon: 'shield-check', render: renderSecurity },
     { label: 'Statistiques', icon: 'chart-column', render: renderStats },
   ];
 
@@ -399,6 +401,33 @@
         });
         O.toast('Réglages enregistrés.');
       } catch (e) { O.toast(e.message); }
+    });
+  }
+
+  async function renderSecurity(pane) {
+    const { values: v } = await loadAppSettings();
+    pane.innerHTML = `
+      <section><h3>Sessions</h3>
+        <p class="op-hint">Sur un poste laissé sans surveillance, une conversation confidentielle ne doit pas rester à l’écran. Passé le délai d’inactivité, l’utilisateur est déconnecté et l’écran est vidé ; une fenêtre l’avertit 60 secondes avant.</p>
+        <div class="op-grid2">
+          <div class="op-field"><label for="s-idle">Déconnexion après inactivité (minutes)</label><input type="number" id="s-idle" min="5" max="1440"></div>
+          <div class="op-field"><label for="s-max">Durée maximale d’une session (heures)</label><input type="number" id="s-max" min="1" max="720"></div>
+        </div>
+        <p class="op-hint">La durée maximale s’applique même à un utilisateur actif : au-delà, il doit se reconnecter. Tant qu’une réponse se génère ou qu’un document est lu, l’utilisateur n’est pas considéré comme inactif. Les nouveaux délais s’appliquent tout de suite, y compris aux sessions déjà ouvertes.</p>
+      </section>
+      <div class="op-pane-actions"><button type="button" class="op-primary" id="s-save">Enregistrer</button></div>`;
+    const $p = (s) => pane.querySelector(s);
+    $p('#s-idle').value = v.session_idle_minutes;
+    $p('#s-max').value = v.session_max_hours;
+    $p('#s-save').addEventListener('click', async () => {
+      const idle = Number($p('#s-idle').value), max = Number($p('#s-max').value);
+      showFormError(pane, '');
+      if (!Number.isInteger(idle) || idle < 5 || idle > 1440) return showFormError(pane, 'Le délai d’inactivité doit être un nombre entier de minutes entre 5 et 1 440.');
+      if (!Number.isInteger(max) || max < 1 || max > 720) return showFormError(pane, 'La durée maximale doit être un nombre entier d’heures entre 1 et 720.');
+      try {
+        await saveAppSettings({ session_idle_minutes: idle, session_max_hours: max });
+        O.toast('Réglages de sécurité enregistrés.');
+      } catch (e) { showFormError(pane, e.message); }
     });
   }
 

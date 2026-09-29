@@ -106,3 +106,14 @@ pages, section en échec) est signalé à l'utilisateur (pastille et encart d'al
 
 Réglages (Administration → Recherche & fichiers) : OCR on/off, pages scannées lues par PDF (100 par défaut).
 Variables : `OPTI_MAX_PDF_PAGES` (300), `OPTI_PDF_TIMEOUT` (300 s), `OPTI_DOC_FULL_BUDGET` (28000), `OPTI_MAX_SECTIONS` (120).
+
+## Sessions et déconnexion automatique
+
+- **Inactivité** : après 30 minutes sans activité (réglable, Administration → Sécurité, 5 minutes minimum), l'utilisateur est
+  déconnecté. Une fenêtre l'avertit 60 secondes avant ; seul un clic ou une touche la ferme. L'écran est vidé (messages,
+  historique, brouillons, pièces jointes) et la page de connexion l'explique.
+- **Durée maximale** : 12 heures (réglable), même pour un utilisateur actif.
+- **Côté serveur** : l'échéance de la session glisse à chaque requête (une écriture par minute au plus) ; le navigateur envoie un
+  signal de présence (`POST /api/auth/ping`) au plus une fois par minute quand l'écran est utilisé, ou pendant qu'une réponse se génère.
+  Une session inactive est refusée par le serveur même si l'onglet est resté ouvert ou a été fermé puis rouvert.
+- Les nouveaux délais s'appliquent immédiatement, y compris aux sessions déjà ouvertes.

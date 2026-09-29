@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DbSession
 
-from . import config
+from . import config, settings
 from .auth import (CurrentUser, authenticate, clear_failures, create_session, current_user,
                    delete_session, is_locked, record_failure)
 from .db import get_db
@@ -30,7 +30,7 @@ def login(body: Login, request: Request, response: Response, db: DbSession = Dep
     token = create_session(db, user)
     response.set_cookie(
         config.SESSION_COOKIE, token,
-        max_age=config.SESSION_DAYS * 86400, httponly=True, samesite="lax",
+        max_age=settings.app().session_max_hours * 3600, httponly=True, samesite="lax",
         secure=config.COOKIE_SECURE, path="/",
     )
     return {"display_name": user.display_name}
@@ -40,6 +40,11 @@ def login(body: Login, request: Request, response: Response, db: DbSession = Dep
 def logout(request: Request, response: Response, db: DbSession = Depends(get_db)):
     delete_session(db, request.cookies.get(config.SESSION_COOKIE))
     response.delete_cookie(config.SESSION_COOKIE, path="/")
+
+
+@router.post("/auth/ping", status_code=204)
+def ping(user: CurrentUser = Depends(current_user)):
+    """Signal de présence : l'écran est utilisé, la session reste ouverte (la dépendance prolonge l'échéance)."""
 
 
 @router.get("/me")

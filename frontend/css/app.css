@@ -216,3 +216,11 @@
 /* Alertes de lecture (pages non lues, sections en échec) */
 #opti-design .op-warn { font-size: 11px; color: #a86a12; background: color-mix(in srgb, #d9932b 12%, transparent); border-radius: 6px; padding: 5px 8px; margin: 3px 6px 5px; line-height: 1.5; }
 #opti-design .op-chip small.is-warn { color: #a86a12; font-weight: 600; }
+
+/* Logo cliquable : retour à l'accueil */
+#opti-design a.op-brand { display: block; text-decoration: none; color: inherit; cursor: pointer; border-radius: 10px; transition: opacity .15s; }
+#opti-design a.op-brand:hover { opacity: .8; }
+#opti-design a.op-brand:focus-visible { outline: 2px solid var(--op-blue); outline-offset: 4px; }
+
+/* Message sur l'écran de connexion (déconnexion automatique, session expirée) */
+#opti-design .op-login-notice { font-size: 11px; line-height: 1.5; color: var(--op-blue); background: var(--op-soft); border: 1px solid var(--op-border); border-radius: 8px; padding: 10px 12px; margin: -6px 0 14px; }

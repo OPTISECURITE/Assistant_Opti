@@ -17,7 +17,7 @@
       <!-- ===== Barre latérale ===== -->
       <aside class="op-sidebar" aria-label="Navigation principale">
         <button type="button" class="op-icon op-nav-close" aria-label="Fermer la navigation" data-action="nav"><i data-lucide="x"></i></button>
-        <div class="op-brand"><img src="/static/img/logo.png" alt="Opti Sécurité"><span>VOTRE ASSISTANT PROFESSIONNEL</span></div>
+        <a class="op-brand" href="/" data-action="home" aria-label="Opti Sécurité : retour à l’accueil"><img src="/static/img/logo.png" alt=""><span>VOTRE ASSISTANT PROFESSIONNEL</span></a>
         <button type="button" class="op-new op-primary" data-action="new"><i data-lucide="plus"></i> Nouvelle conversation</button>
         <nav class="op-mainnav" aria-label="Outils">
           <button type="button" data-action="search"><i data-lucide="search"></i> Rechercher <span class="op-key">Ctrl K</span></button>
@@ -144,6 +144,7 @@
           <div class="op-input-wrap"><i data-lucide="user"></i><input id="op-login-user" type="text" placeholder="prenom.nom" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
           <label for="op-password">Mot de passe</label>
           <div class="op-input-wrap"><i data-lucide="lock-keyhole"></i><input id="op-password" type="password" placeholder="Votre mot de passe" autocomplete="current-password" required><button type="button" class="op-icon" aria-label="Afficher le mot de passe" data-action="password"><i data-lucide="eye"></i></button></div>
+          <div class="op-login-notice" role="status" hidden></div>
           <div class="op-login-error" role="alert" hidden></div>
           <button type="submit" class="op-primary op-login-submit">Se connecter <i data-lucide="arrow-right"></i></button>
           <div class="op-login-help">Besoin d’aide ? <button type="button" data-action="login-help">Contacter mon administrateur</button></div>

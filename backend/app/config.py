@@ -31,7 +31,6 @@ SYSTEM_PROMPT = os.getenv("OPTI_SYSTEM_PROMPT", (
 
 # Sessions de connexion
 SESSION_COOKIE = "opti_session"
-SESSION_DAYS = int(os.getenv("OPTI_SESSION_DAYS", "7"))
 # À passer à true dès que l'application est servie en HTTPS
 COOKIE_SECURE = os.getenv("OPTI_COOKIE_SECURE", "false").lower() == "true"
 

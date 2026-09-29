@@ -33,6 +33,9 @@ class AppSettings(BaseModel):
     analysis_enabled: bool = True
     max_analysis_steps: int = Field(default=config.MAX_ANALYSIS_STEPS, ge=1, le=5)
     sandbox_timeout: int = Field(default=config.SANDBOX_TIMEOUT, ge=10, le=300)
+    # Sécurité des sessions
+    session_idle_minutes: int = Field(default=30, ge=5, le=1440)   # déconnexion après inactivité
+    session_max_hours: int = Field(default=12, ge=1, le=720)       # durée maximale d'une session, activité comprise
     ocr_enabled: bool = True                                   # reconnaissance de texte des PDF scannés
     max_ocr_pages: int = Field(default=100, ge=1, le=300)
 

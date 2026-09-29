@@ -20,12 +20,14 @@
     menuChat: null,     // conversation visée par le menu « … »
     menuAnchor: null,
     pending: [],        // pièces jointes en attente d'envoi : { id?, filename, kind, uploading }
+    loggedIn: false,    // une session est ouverte dans ce navigateur
     webForced: false,   // bouton globe : recherche forcée pour les prochains messages
     follow: true,       // suivre la réponse en bas de l'écran (désactivé si l'utilisateur remonte)
     prefs: { tone: 'neutre', length: 'equilibree', instructions: '', text_size: 'normal', send_key: 'enter', web_mode: 'auto', doc_mode: 'auto' },
   };
 
   // ── Utilitaires ───────────────────────────────────────────────────────────
+  const SESSION_EXPIRED = 'Votre session a expiré. Veuillez vous reconnecter.';
   const icons = () => window.lucide?.createIcons({ attrs: { width: 18, height: 18 } });
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   marked.setOptions({ gfm: true, breaks: true });
@@ -178,7 +180,7 @@
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     });
-    if (resp.status === 401) showLogin();
+    if (resp.status === 401) showLogin(SESSION_EXPIRED);
     if (!resp.ok) {
       const err = new Error(`HTTP ${resp.status}`);
       err.status = resp.status;
@@ -217,6 +219,7 @@
     closeMenu();
     lastFocus = document.activeElement;
     $('.op-modal').classList.remove('is-wide');
+    delete $('.op-modal').dataset.idle;
     $('#op-modal-title').textContent = title;
     $('.op-modal-body').innerHTML = bodyHtml;
     $('.op-modal-backdrop').hidden = false;
@@ -477,7 +480,7 @@
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
-      if (resp.status === 401) { showLogin(); throw new Error('401'); }
+      if (resp.status === 401) { showLogin(SESSION_EXPIRED); throw new Error('401'); }
       if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -585,7 +588,7 @@
       form.append('file', file);
       try {
         const resp = await fetch('/api/files', { method: 'POST', body: form });
-        if (resp.status === 401) { showLogin(); return; }
+        if (resp.status === 401) { showLogin(SESSION_EXPIRED); return; }
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) throw new Error(data.detail || 'Envoi impossible.');
         Object.assign(entry, data, { uploading: false });
@@ -644,6 +647,8 @@
   // ── Actions (boutons data-action) ─────────────────────────────────────────
   const actions = {
     new: () => showHome(),
+    home: () => showHome(),
+    stay: () => {},            // « Rester connecté » : le clic compte déjà comme une activité
     profile: () => toggleProfile(),
     logout: async () => {
       toggleProfile(false);
@@ -794,6 +799,8 @@
   root.addEventListener('click', (e) => {
     if (!e.target.closest('.op-thread-menu,[data-action="thread-menu"]')) closeMenu();
     if (!e.target.closest('.op-profile-anchor')) toggleProfile(false);
+    const home = e.target.closest('a[data-action="home"]');
+    if (home && e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); actions.home(); return; }
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.remove !== undefined) { removePending(Number(b.dataset.remove)); return; }
@@ -850,8 +857,11 @@
   }
 
   // ── Connexion ─────────────────────────────────────────────────────────────
-  function showLogin() {
+  function showLogin(message) {
     if (!$('.op-login').hidden) return;
+    const wasLoggedIn = state.loggedIn;
+    state.loggedIn = false;
+    idle.warning = false;
     state.controller?.abort();
     state.chats = [];
     state.active = null;
@@ -859,14 +869,86 @@
     renderPending();
     closeModal();
     closeMenu();
+    toggleProfile(false);
+    // Rien ne doit rester affiché ni en mémoire pour le prochain utilisateur du poste
+    $('#op-thread').replaceChildren();
+    $('#op-recents').replaceChildren();
+    $$('.op-composer textarea').forEach((t) => { t.value = ''; t.style.height = ''; });
     $('.op-app').hidden = true;
     $('.op-login').hidden = false;
     $('#op-password').value = '';
     $('.op-login-error').hidden = true;
+    const notice = $('.op-login-notice');
+    notice.textContent = wasLoggedIn && message ? message : '';
+    notice.hidden = !(wasLoggedIn && message);
     if (location.pathname !== '/') history.replaceState({}, '', '/');
     icons();
     $('#op-login-user').focus();
   }
+
+  // ── Inactivité : avertissement puis déconnexion automatique ───────────────
+  // Le délai vient de l'administration (/api/config). Tant qu'une réponse est en cours de
+  // génération, l'utilisateur n'est pas considéré comme inactif. Un signal de présence est
+  // envoyé au serveur (au plus une fois par minute) pour que sa session reste ouverte.
+  const idle = { last: Date.now(), warning: false, dirty: false };
+  const idleLimit = () => Math.max(0.05, Number(state.config.idle_timeout_minutes) || 30) * 60000;
+  const idleWarnAt = () => Math.min(60000, idleLimit() / 3);
+
+  function noteActivity() {
+    idle.last = Date.now();
+    idle.dirty = true;
+    if (idle.warning) hideIdleWarning();
+  }
+  ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart', 'scroll', 'click'].forEach((ev) =>
+    window.addEventListener(ev, (e) => {
+      // Pendant l'avertissement, seuls un clic ou une touche comptent : un simple mouvement de souris vers le
+      // bouton « Rester connecté » ne doit pas faire disparaître la fenêtre avant le clic.
+      if (idle.warning && ev !== 'keydown' && ev !== 'click') return;
+      // Chrome émet de faux mouvements de souris après un changement de mise en page : on les ignore
+      if (ev === 'mousemove' && !e.movementX && !e.movementY) return;
+      noteActivity();
+    }, { passive: true, capture: true }));
+
+  function showIdleWarning(seconds) {
+    if (!idle.warning) {
+      idle.warning = true;
+      modal('Toujours là ?',
+        `<p>Sans activité, vous allez être déconnecté dans <b id="op-idle-count">${seconds}</b> secondes, pour protéger vos conversations.</p>
+         <div class="op-modal-actions"><button type="button" class="op-primary" data-action="stay">Rester connecté</button></div>`);
+      $('.op-modal').dataset.idle = '1';
+    }
+    const c = $('#op-idle-count');
+    if (c) c.textContent = seconds;
+  }
+  function hideIdleWarning() {
+    idle.warning = false;
+    if ($('.op-modal').dataset.idle) closeModal();
+  }
+
+  async function idleLogout() {
+    try { await fetch('/api/auth/logout', { method: 'POST', keepalive: true }); } catch {}
+    showLogin('Vous avez été déconnecté pour cause d’inactivité.');
+  }
+
+  function idleTick() {
+    if (!state.loggedIn) return;
+    if (state.controller) { idle.last = Date.now(); return; }   // une réponse se génère : l'utilisateur attend
+    const left = idleLimit() - (Date.now() - idle.last);
+    if (left <= 0) idleLogout();
+    else if (left <= idleWarnAt()) showIdleWarning(Math.ceil(left / 1000));
+    else if (idle.warning) hideIdleWarning();
+  }
+
+  async function heartbeat() {
+    if (!state.loggedIn || !(idle.dirty || state.controller)) return;
+    idle.dirty = false;
+    try {
+      const r = await fetch('/api/auth/ping', { method: 'POST' });
+      if (r.status === 401) showLogin(SESSION_EXPIRED);
+    } catch { /* réseau indisponible : on réessaiera à la prochaine minute */ }
+  }
+  setInterval(idleTick, 1000);
+  setInterval(heartbeat, 60000);
 
   $('#op-login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -954,6 +1036,9 @@
 
   async function startApp() {
     try { state.me = await api('/api/me'); } catch { return; }   // 401 → écran de connexion
+    state.loggedIn = true;
+    idle.last = Date.now();
+    idle.dirty = false;
     try { state.config = await api('/api/config'); } catch {}
     try { state.prefs = await api('/api/me/settings'); } catch {}
     applyPrefs();

@@ -15,7 +15,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session as DbSession
 
-from . import config
+from . import config, settings
 from .db import get_db
 from .models import Session, User, now_ms
 
@@ -93,8 +93,9 @@ def create_session(db: DbSession, user: User) -> str:
     token = secrets.token_urlsafe(32)
     now = now_ms()
     db.execute(delete(Session).where(Session.expires_at < now))   # ménage des sessions expirées
-    db.add(Session(token_hash=_digest(token), user_id=user.id,
-                   expires_at=now + config.SESSION_DAYS * 86_400_000))
+    s = settings.app()
+    db.add(Session(token_hash=_digest(token), user_id=user.id, created_at=now,
+                   expires_at=now + s.session_idle_minutes * 60_000))
     user.last_login_at = now
     db.commit()
     return token
@@ -110,12 +111,21 @@ def current_user(request: Request, db: DbSession = Depends(get_db)) -> CurrentUs
     token = request.cookies.get(config.SESSION_COOKIE)
     if token:
         sess = db.get(Session, _digest(token))
-        if sess and sess.expires_at > now_ms():
+        if sess:
+            now = now_ms()
+            s = settings.app()
+            hard_limit = sess.created_at + s.session_max_hours * 3_600_000       # durée maximale, activité comprise
+            if sess.expires_at <= now or hard_limit <= now:
+                db.delete(sess)                                                 # inactive trop longtemps, ou trop ancienne
+                db.commit()
+                raise HTTPException(status_code=401, detail="Session expirée")
             user = db.get(User, sess.user_id)
             if user and user.active:
-                # session glissante : prolongée tant que l'utilisateur est actif
-                if sess.expires_at - now_ms() < (config.SESSION_DAYS - 1) * 86_400_000:
-                    sess.expires_at = now_ms() + config.SESSION_DAYS * 86_400_000
+                # Inactivité : l'échéance glisse à chaque requête (une écriture par minute au plus).
+                # Elle est aussi ramenée à la limite si l'administrateur a raccourci les délais.
+                deadline = min(now + s.session_idle_minutes * 60_000, hard_limit)
+                if deadline - sess.expires_at > 60_000 or deadline < sess.expires_at:
+                    sess.expires_at = deadline
                     db.commit()
                 return CurrentUser(user.id, user.username, user.display_name, user.is_admin)
     raise HTTPException(status_code=401, detail="Authentification requise")

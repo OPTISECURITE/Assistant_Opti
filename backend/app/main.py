@@ -47,7 +47,7 @@ async def get_config():
     s = settings.app()
     return {"model": s.model, "model_label": s.model_label, "web_enabled": s.web_enabled,
             "uploads_enabled": s.uploads_enabled, "analysis_enabled": s.analysis_enabled,
-            "max_upload_mb": s.max_upload_mb}
+            "max_upload_mb": s.max_upload_mb, "idle_timeout_minutes": s.session_idle_minutes}
 
 
 # ── Front ────────────────────────────────────────────────────────────────────
