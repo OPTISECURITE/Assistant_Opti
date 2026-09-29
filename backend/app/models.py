@@ -48,3 +48,31 @@ class Message(Base):
     created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
 
     chat: Mapped[Chat] = relationship(back_populates="messages")
+
+
+class User(Base):
+    """
+    Compte utilisateur. source = 'local' (mot de passe stocké, haché Argon2)
+    ou 'ldap' (étape ultérieure : mot de passe vérifié par l'AD, jamais stocké).
+    """
+    __tablename__ = "user"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    username: Mapped[str] = mapped_column(String(150), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(16), default="local")
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+    last_login_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class Session(Base):
+    """Session de connexion. Seule l'empreinte SHA-256 du jeton est stockée."""
+    __tablename__ = "session"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("user.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+    expires_at: Mapped[int] = mapped_column(BigInteger, index=True)

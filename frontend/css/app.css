@@ -67,3 +67,16 @@
 #opti-design .op-secondary:hover { background: var(--op-soft); color: var(--op-blue); }
 #opti-design .op-danger { background: #aa5450 !important; }
 #opti-design .op-danger:hover { background: #8e3f3b !important; }
+
+/* Erreur de connexion */
+#opti-design .op-login-error { font-size: 11px; color: #a75751; background: color-mix(in srgb, #a75751 8%, transparent); border-radius: 8px; padding: 9px 11px; margin: -6px 0 14px; }
+#opti-design .op-login-submit:disabled { opacity: .6; }
+/* Champs de connexion : pas de fond blanc imposé par l'auto-remplissage du navigateur */
+#opti-design .op-input-wrap input:-webkit-autofill,
+#opti-design .op-input-wrap input:-webkit-autofill:hover,
+#opti-design .op-input-wrap input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--op-ink);
+  -webkit-box-shadow: 0 0 0 1000px var(--op-bg) inset;
+  transition: background-color 9999s;
+}
+#opti-design .op-input-wrap input:focus { outline: none; }

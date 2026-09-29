@@ -28,3 +28,9 @@ SYSTEM_PROMPT = os.getenv("OPTI_SYSTEM_PROMPT", (
     "Tu utilises le Markdown (titres courts, listes, tableaux) quand cela aide la lecture. "
     "Si tu n'es pas sûr d'une information, dis-le plutôt que d'inventer."
 ))
+
+# Sessions de connexion
+SESSION_COOKIE = "opti_session"
+SESSION_DAYS = int(os.getenv("OPTI_SESSION_DAYS", "7"))
+# À passer à true dès que l'application est servie en HTTPS
+COOKIE_SECURE = os.getenv("OPTI_COOKIE_SECURE", "false").lower() == "true"

@@ -1,7 +1,7 @@
 /*
- * Assistant Opti — front (étape 2)
- * Conversations enregistrées côté serveur : historique, renommer, épingler,
- * télécharger, supprimer, recherche, lien direct /c/<id>.
+ * Assistant Opti — front (étape 3)
+ * Connexion, conversations enregistrées côté serveur (historique, renommer,
+ * épingler, télécharger, supprimer, recherche), lien direct /c/<id>.
  */
 (() => {
   'use strict';
@@ -32,6 +32,7 @@
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     });
+    if (resp.status === 401) showLogin();
     if (!resp.ok) {
       const err = new Error(`HTTP ${resp.status}`);
       err.status = resp.status;
@@ -319,6 +320,7 @@
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
+      if (resp.status === 401) { showLogin(); throw new Error('401'); }
       if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -375,6 +377,23 @@
   // ── Actions (boutons data-action) ─────────────────────────────────────────
   const actions = {
     new: () => showHome(),
+    profile: () => toggleProfile(),
+    logout: async () => {
+      toggleProfile(false);
+      try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
+      showLogin();
+    },
+    password: (btn) => {
+      const input = $('#op-password');
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.setAttribute('aria-label', show ? 'Masquer le mot de passe' : 'Afficher le mot de passe');
+      btn.innerHTML = `<i data-lucide="${show ? 'eye-off' : 'eye'}"></i>`;
+      icons();
+    },
+    'login-help': () => modal('Aide à la connexion',
+      `<p>Votre compte est créé par le service informatique d’Opti Sécurité.</p>
+       <p>Mot de passe oublié ou compte bloqué : contactez votre administrateur.</p>`),
     nav: () => $('.op-app').classList.toggle('op-nav-open'),
     'close-modal': closeModal,
     soon: () => toast('Fonctionnalité prévue dans une prochaine étape.'),
@@ -486,6 +505,7 @@
   // ── Écouteurs ─────────────────────────────────────────────────────────────
   root.addEventListener('click', (e) => {
     if (!e.target.closest('.op-thread-menu,[data-action="thread-menu"]')) closeMenu();
+    if (!e.target.closest('.op-profile-anchor')) toggleProfile(false);
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.prompt) { $('#op-question').value = b.dataset.prompt; $('#op-question').focus(); return; }
@@ -516,8 +536,8 @@
   $('.op-modal-backdrop').addEventListener('click', (e) => { if (e.target === $('.op-modal-backdrop')) closeModal(); });
   window.addEventListener('resize', () => closeMenu());
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeMenu(true); closeModal(); $('.op-app').classList.remove('op-nav-open'); }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); actions.search(); }
+    if (e.key === 'Escape') { closeMenu(true); closeModal(); toggleProfile(false); $('.op-app').classList.remove('op-nav-open'); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' && !$('.op-app').hidden) { e.preventDefault(); actions.search(); }
     const menu = $('.op-thread-menu');
     if (!menu.hidden && ['ArrowDown', 'ArrowUp'].includes(e.key)) {
       e.preventDefault();
@@ -527,16 +547,91 @@
     }
   });
 
+  // ── Menu profil ───────────────────────────────────────────────────────────
+  function toggleProfile(open) {
+    const menu = $('.op-profile-menu');
+    const next = open ?? menu.hidden;
+    menu.hidden = !next;
+    $('.op-profile').setAttribute('aria-expanded', String(next));
+  }
+
+  // ── Connexion ─────────────────────────────────────────────────────────────
+  function showLogin() {
+    if (!$('.op-login').hidden) return;
+    state.controller?.abort();
+    state.chats = [];
+    state.active = null;
+    closeModal();
+    closeMenu();
+    $('.op-app').hidden = true;
+    $('.op-login').hidden = false;
+    $('#op-password').value = '';
+    $('.op-login-error').hidden = true;
+    if (location.pathname !== '/') history.replaceState({}, '', '/');
+    icons();
+    $('#op-login-user').focus();
+  }
+
+  $('#op-login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = $('#op-login-user').value.trim();
+    const password = $('#op-password').value;
+    const errBox = $('.op-login-error');
+    const submit = $('.op-login-submit');
+    if (!username || !password) {
+      errBox.textContent = 'Saisissez votre identifiant et votre mot de passe.';
+      errBox.hidden = false;
+      return;
+    }
+    submit.disabled = true;
+    errBox.hidden = true;
+    try {
+      const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (resp.ok) {
+        $('#op-password').value = '';
+        await startApp();
+        return;
+      }
+      const data = await resp.json().catch(() => ({}));
+      errBox.textContent = data.detail || 'Connexion impossible.';
+      errBox.hidden = false;
+      $('#op-password').select();
+    } catch {
+      errBox.textContent = 'Serveur injoignable. Réessayez dans un instant.';
+      errBox.hidden = false;
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
   // ── Démarrage ─────────────────────────────────────────────────────────────
-  async function init() {
-    applyTheme();
+  function applyIdentity() {
+    const name = state.me.display_name || state.me.username || '';
+    const first = name.split(/\s+/)[0] || '';
+    const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
+    $('#op-greeting').textContent = first ? `BONJOUR, ${first.toLocaleUpperCase('fr')}` : 'BONJOUR';
+    $$('[data-display-name]').forEach((el) => (el.textContent = name));
+    $$('[data-username]').forEach((el) => (el.textContent = state.me.username || ''));
+    $$('[data-initials]').forEach((el) => (el.textContent = initials));
+  }
+
+  async function startApp() {
+    try { state.me = await api('/api/me'); } catch { return; }   // 401 → écran de connexion
     try { state.config = await api('/api/config'); } catch {}
-    try { state.me = await api('/api/me'); } catch {}
     $$('.op-model').forEach((b) => (b.innerHTML = `<span class="op-model-dot"></span> ${esc(state.config.model_label)} <i data-lucide="chevron-down"></i>`));
-    $('#op-username').textContent = state.me.display_name;
+    applyIdentity();
+    $('.op-login').hidden = true;
+    $('.op-app').hidden = false;
     await refreshChats();
     await route();
     icons();
   }
-  init();
+
+  applyTheme();
+  icons();
+  startApp();
 })();

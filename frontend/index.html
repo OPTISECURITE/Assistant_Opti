@@ -12,7 +12,7 @@
 <body>
 <div id="opti-design" aria-label="Assistant Opti Sécurité">
   <div class="op-window">
-    <div class="op-app">
+    <div class="op-app" hidden>
 
       <!-- ===== Barre latérale ===== -->
       <aside class="op-sidebar" aria-label="Navigation principale">
@@ -30,10 +30,18 @@
         <div class="op-sidebar-bottom">
           <button type="button" class="op-help" data-action="help"><i data-lucide="circle-help"></i> Bien démarrer</button>
           <div class="op-profile-anchor">
-            <button type="button" class="op-profile" data-action="settings">
-              <span class="op-avatar" id="op-avatar">?<span class="op-online"></span></span>
-              <span class="op-profile-text"><strong id="op-username">Invité</strong><small>Mon espace personnel</small></span>
-              <i data-lucide="settings-2"></i>
+            <div class="op-profile-menu" hidden>
+              <div class="op-menu-id"><span class="op-avatar" data-initials></span><div><strong data-display-name></strong><small><b class="op-online"></b> <span data-username></span></small></div><button type="button" class="op-icon" aria-label="Fermer le menu" data-action="profile"><i data-lucide="x"></i></button></div>
+              <div class="op-menu-group">
+                <button type="button" data-action="settings"><i data-lucide="settings-2"></i> Réglages</button>
+                <button type="button" data-action="help"><i data-lucide="circle-help"></i> Bien démarrer</button>
+              </div>
+              <button type="button" class="op-logout" data-action="logout"><i data-lucide="log-out"></i> Se déconnecter</button>
+            </div>
+            <button type="button" class="op-profile" aria-expanded="false" data-action="profile">
+              <span class="op-avatar"><span data-initials></span><span class="op-online"></span></span>
+              <span class="op-profile-text"><strong data-display-name></strong><small>Mon espace personnel</small></span>
+              <i data-lucide="chevrons-up-down"></i>
             </button>
           </div>
         </div>
@@ -113,6 +121,32 @@
 
         <footer class="op-mainfooter"><span>Un assistant pour vos idées. Votre expertise pour décider.</span><span>Les réponses de l’IA sont à vérifier.</span></footer>
       </main>
+    </div>
+
+    <!-- ===== Écran de connexion ===== -->
+    <div class="op-login" hidden>
+      <section class="op-login-brand">
+        <img class="op-login-logo" src="/static/img/logo.png" alt="Opti Sécurité">
+        <div class="op-login-orbits" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="op-login-message"><div class="op-login-eyebrow"><span></span> ASSISTANT OPTI SÉCURITÉ</div><h2>Votre expertise.<br><em>Un nouvel élan.</em></h2><p>Le compagnon de vos équipes<br>pour simplifier chaque journée.</p><div class="op-login-line"></div><div class="op-login-features"><span><i data-lucide="file-text"></i> Synthétiser</span><span><i data-lucide="pen-line"></i> Rédiger</span><span><i data-lucide="clipboard-check"></i> Préparer</span></div></div>
+        <span class="op-login-brand-foot">L’INTELLIGENCE AU SERVICE DE VOTRE MÉTIER.</span>
+      </section>
+      <section class="op-login-form-side">
+        <span class="op-login-area"><i data-lucide="users"></i> ESPACE COLLABORATEURS</span>
+        <form class="op-login-form" id="op-login-form" novalidate>
+          <img src="/static/img/mark.png" class="op-login-mark" alt="">
+          <h2>Heureux de <br>vous retrouver.</h2>
+          <p>Connectez-vous à votre assistant<br>avec votre compte professionnel.</p>
+          <label for="op-login-user">Identifiant</label>
+          <div class="op-input-wrap"><i data-lucide="user"></i><input id="op-login-user" type="text" placeholder="prenom.nom" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+          <label for="op-password">Mot de passe</label>
+          <div class="op-input-wrap"><i data-lucide="lock-keyhole"></i><input id="op-password" type="password" placeholder="Votre mot de passe" autocomplete="current-password" required><button type="button" class="op-icon" aria-label="Afficher le mot de passe" data-action="password"><i data-lucide="eye"></i></button></div>
+          <div class="op-login-error" role="alert" hidden></div>
+          <button type="submit" class="op-primary op-login-submit">Se connecter <i data-lucide="arrow-right"></i></button>
+          <div class="op-login-help">Besoin d’aide ? <button type="button" data-action="login-help">Contacter mon administrateur</button></div>
+        </form>
+        <div class="op-login-foot">© OPTI SÉCURITÉ <span>Votre assistant professionnel</span></div>
+      </section>
     </div>
 
     <!-- Menu d'actions d'une conversation -->

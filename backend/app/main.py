@@ -11,8 +11,8 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import chats, config
-from .auth import CurrentUser, current_user
+from . import auth_routes, chats, config
+from .auth import current_user
 from .db import init_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
@@ -25,6 +25,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Assistant Opti", docs_url=None, redoc_url=None, lifespan=lifespan)
+app.include_router(auth_routes.router)
 app.include_router(chats.router)
 
 
@@ -33,14 +34,9 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/api/config")
+@app.get("/api/config", dependencies=[Depends(current_user)])
 async def get_config():
     return {"model": config.MODEL, "model_label": config.MODEL_LABEL}
-
-
-@app.get("/api/me")
-async def me(user: CurrentUser = Depends(current_user)):
-    return {"id": user.id, "display_name": user.display_name}
 
 
 # ── Front ────────────────────────────────────────────────────────────────────
