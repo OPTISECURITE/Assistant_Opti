@@ -22,6 +22,7 @@ navigateur ──HTTP──> backend FastAPI (port 8100) ──> Ollama (127.0.0
 - `backend/app/agent.py`  : contexte envoyé au modèle et boucle d'analyse de données
 - `backend/app/sandbox.py`: exécution isolée du code d'analyse (conteneur Docker jetable)
 - `deploy/sandbox/`       : image Docker du bac à sable
+- `backend/app/documents.py` : documents longs : découpage, recherche de passages (BM25), synthèse section par section
 - `backend/app/web.py`    : recherche web (SearXNG), lecture des pages, protection SSRF
 - `backend/app/settings.py` : réglages globaux (administration) et préférences utilisateur
 - `backend/app/admin.py` / `me.py` : API d'administration et de l'espace personnel
@@ -50,8 +51,9 @@ Interface : `http://<serveur>:8100`
 4. ✅ Pièces jointes : documents (PDF, Word, texte) et analyse de données (CSV, Excel) sur le fichier complet
 5. ✅ Recherche web via SearXNG : automatique quand nécessaire (ou forcée), requêtes anonymisées, sources citées, protection SSRF
 6. ✅ Réglages utilisateur (ton, longueur, instructions, texte, envoi, export) et Administration (comptes, modèle, consigne, options, statistiques)
-7. Bases documentaires (RAG)
-8. Authentification LDAP (AD AMG.lan) en complément des comptes locaux, HTTPS
+7. ✅ Lecture avancée des PDF : tableaux, OCR des scans, longs documents (passages pertinents ou synthèse), pages citées
+8. Bases documentaires (RAG avec embeddings)
+9. Authentification LDAP (AD AMG.lan) en complément des comptes locaux, HTTPS
 
 ## Sauvegarde
 
@@ -75,6 +77,19 @@ sans réseau, système de fichiers en lecture seule, utilisateur non privilégi�
 64 processus, 60 secondes maximum, fichiers de la conversation montés en lecture seule dans `/data`.
 
 ```bash
-docker build -t opti-sandbox:1 deploy/sandbox
-venv/bin/python backend/manage.py test-sandbox     # les 5 contrôles doivent être ✓
+docker build -t opti-sandbox:2 deploy/sandbox
+venv/bin/python backend/manage.py test-sandbox     # les 5 contrôles d'isolation, la lecture PDF et l'OCR doivent être ✓
 ```
+
+## Lecture des PDF
+
+Les PDF sont lus **dans le bac à sable** (jamais par l'application elle-même) : texte, tableaux à bordures
+(convertis en Markdown) et OCR automatique des pages scannées (tesseract, français + anglais).
+
+- **Document court** (moins de ~24 000 caractères) : donné en entier au modèle.
+- **Document long, question précise** : passages les plus proches de la question (BM25) avec leurs pages ; le modèle cite les pages.
+- **Document long, demande globale** (« résume », « analyse ce document ») : synthèse section par section, mise en cache
+  dans `data/files/<id>/summary.json`.
+
+Réglages (Administration → Recherche & fichiers) : OCR on/off, pages scannées lues par PDF.
+Variables : `OPTI_MAX_PDF_PAGES` (300), `OPTI_PDF_TIMEOUT` (300 s).

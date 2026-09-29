@@ -39,11 +39,57 @@
   const toggle = (id, label, hint, checked) =>
     `<label class="op-toggle"><span>${esc(label)}${hint ? `<small>${esc(hint)}</small>` : ''}</span><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}></label>`;
   const fmtDate = (ts) => (ts ? new Date(ts).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : 'jamais');
+  const FIELD_NAMES = { password: 'Le mot de passe', username: 'L’identifiant', display_name: 'Le nom affiché',
+    system_prompt: 'La consigne système', model_label: 'Le nom affiché du modèle', searxng_url: 'L’adresse de SearXNG' };
+  const humanize = (d) => {
+    const field = d.loc?.at(-1);
+    const name = FIELD_NAMES[field] || `Le champ « ${field} »`;
+    if (d.type === 'string_too_short') return `${name} doit contenir au moins ${d.ctx?.min_length} caractères.`;
+    if (d.type === 'string_too_long') return `${name} est trop long (${d.ctx?.max_length} caractères au maximum).`;
+    if (d.type === 'string_pattern_mismatch' && field === 'username') return `${name} ne peut contenir que des lettres, chiffres, points, tirets et underscores (sans espace ni accent).`;
+    if (d.type?.startsWith('greater_than') || d.type?.startsWith('less_than')) return `${name} est hors des limites autorisées.`;
+    return `${name} n’est pas valide.`;
+  };
   const errMsg = async (resp) => {
     const data = await resp.json().catch(() => ({}));
-    if (Array.isArray(data.detail)) return 'Valeur invalide : ' + data.detail.map((d) => d.loc?.at(-1)).join(', ');
+    if (Array.isArray(data.detail)) return data.detail.map(humanize).join(' ');
     return data.detail || 'Action impossible.';
   };
+
+  // ── Mots de passe : contrôle et générateur ────────────────────────────────
+  const PW_MIN = 12;
+  const USERNAME_RX = /^[A-Za-z0-9._-]{2,}$/;
+  function generatePassword(length = 16) {
+    const sets = ['abcdefghjkmnpqrstuvwxyz', 'ABCDEFGHJKLMNPQRSTUVWXYZ', '23456789', '!#$%*+-=?@'];
+    const all = sets.join('');
+    const rnd = (max) => { const a = new Uint32Array(1); let x; do { crypto.getRandomValues(a); x = a[0]; } while (x >= 4294967296 - (4294967296 % max)); return x % max; };
+    const chars = sets.map((set) => set[rnd(set.length)]);          // au moins un de chaque famille
+    while (chars.length < length) chars.push(all[rnd(all.length)]);
+    for (let i = chars.length - 1; i > 0; i--) { const j = rnd(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+    return chars.join('');
+  }
+  const passwordProblem = (pw) => (pw.length < PW_MIN
+    ? `Le mot de passe doit contenir au moins ${PW_MIN} caractères (il en contient ${pw.length}).` : '');
+  const pwField = (id, label = 'Mot de passe') => `
+    <div class="op-field"><label for="${id}">${label}</label>
+      <div class="op-pw-row"><input type="text" id="${id}" autocomplete="off" spellcheck="false" placeholder="${PW_MIN} caractères minimum">
+        <button type="button" class="op-secondary" data-pw="generate">Générer</button>
+        <button type="button" class="op-secondary" data-pw="copy">Copier</button></div></div>`;
+  function bindPw(box, id) {
+    const input = box.querySelector('#' + id);
+    box.querySelector('[data-pw=generate]').addEventListener('click', () => { input.value = generatePassword(); input.focus(); });
+    box.querySelector('[data-pw=copy]').addEventListener('click', async () => {
+      if (!input.value) return O.toast('Aucun mot de passe à copier.');
+      try { await navigator.clipboard.writeText(input.value); O.toast('Mot de passe copié.'); }
+      catch { input.select(); O.toast('Copie automatique impossible : sélectionnez et copiez le texte.'); }
+    });
+  }
+  function showFormError(box, msg) {
+    let el = box.querySelector('.op-form-error');
+    if (!msg) { el?.remove(); return; }
+    if (!el) { el = document.createElement('div'); el.className = 'op-form-error'; el.setAttribute('role', 'alert'); box.querySelector('.op-pane-actions').before(el); }
+    el.textContent = msg;
+  }
   async function send(url, method, body) {
     const resp = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     if (!resp.ok) throw new Error(await errMsg(resp));
@@ -195,23 +241,29 @@
         <div class="op-grid2">
           ${isNew ? '<div class="op-field"><label for="f-username">Identifiant</label><input type="text" id="f-username" placeholder="prenom.nom" autocomplete="off"></div>' : ''}
           <div class="op-field"><label for="f-name">Nom affiché</label><input type="text" id="f-name" placeholder="Prénom Nom"></div>
-          ${isNew ? '<div class="op-field"><label for="f-pass">Mot de passe</label><input type="password" id="f-pass" autocomplete="new-password"></div>' : ''}
         </div>
+        ${isNew ? pwField('f-pass') : ''}
         ${u && u.id === O.state.me.id ? '' : toggle('f-admin', 'Administrateur', 'Accès à cette page d’administration', u?.is_admin)}
         <div class="op-pane-actions"><button type="button" class="op-primary" id="f-save">${isNew ? 'Créer le compte' : 'Enregistrer'}</button>
           <button type="button" class="op-secondary" id="f-cancel">Annuler</button></div>
       </div>`;
     if (u) box.querySelector('#f-name').value = u.display_name;
+    if (isNew) bindPw(box, 'f-pass');
     box.querySelector('input').focus();
     box.querySelector('#f-cancel').addEventListener('click', () => (box.innerHTML = ''));
     box.querySelector('#f-save').addEventListener('click', async () => {
       const body = { display_name: box.querySelector('#f-name').value.trim() };
       const adm = box.querySelector('#f-admin');
       if (adm) body.is_admin = adm.checked;
+      showFormError(box, '');
+      if (!body.display_name) return showFormError(box, 'Indiquez le nom affiché (par exemple « Prénom Nom »).');
       try {
         if (isNew) {
           body.username = box.querySelector('#f-username').value.trim();
           body.password = box.querySelector('#f-pass').value;
+          if (!USERNAME_RX.test(body.username)) return showFormError(box, 'L’identifiant doit contenir au moins 2 caractères : lettres, chiffres, points, tirets ou underscores (sans espace ni accent).');
+          const problem = passwordProblem(body.password);
+          if (problem) return showFormError(box, problem);
           await send('/api/admin/users', 'POST', body);
           O.toast(`Compte ${body.username} créé.`);
         } else {
@@ -219,7 +271,7 @@
           O.toast('Compte mis à jour.');
         }
         renderUsers(pane);
-      } catch (e) { O.toast(e.message); }
+      } catch (e) { showFormError(box, e.message); }
     });
   }
 
@@ -228,14 +280,18 @@
     if (kind === 'edit') return userForm(pane, u);
     if (kind === 'password') {
       box.innerHTML = `<div class="op-inline-form"><h3 style="margin-bottom:12px">Nouveau mot de passe pour ${esc(u.username)}</h3>
-        <div class="op-field"><input type="password" id="f-newpass" autocomplete="new-password" placeholder="12 caractères minimum"></div>
-        <p class="op-hint">L’utilisateur sera déconnecté de toutes ses sessions.</p>
+        ${pwField('f-newpass', 'Nouveau mot de passe')}
+        <p class="op-hint">L’utilisateur sera déconnecté de toutes ses sessions. Pensez à lui transmettre le nouveau mot de passe.</p>
         <div class="op-pane-actions"><button type="button" class="op-primary" id="f-go">Changer le mot de passe</button><button type="button" class="op-secondary" id="f-cancel">Annuler</button></div></div>`;
+      bindPw(box, 'f-newpass');
       box.querySelector('#f-newpass').focus();
       box.querySelector('#f-cancel').addEventListener('click', () => (box.innerHTML = ''));
       box.querySelector('#f-go').addEventListener('click', async () => {
-        try { await send(`/api/admin/users/${u.id}`, 'PATCH', { password: box.querySelector('#f-newpass').value }); O.toast('Mot de passe modifié.'); box.innerHTML = ''; }
-        catch (e) { O.toast(e.message); }
+        const pw = box.querySelector('#f-newpass').value;
+        const problem = passwordProblem(pw);
+        if (problem) return showFormError(box, problem);
+        try { await send(`/api/admin/users/${u.id}`, 'PATCH', { password: pw }); O.toast('Mot de passe modifié.'); box.innerHTML = ''; }
+        catch (e) { showFormError(box, e.message); }
       });
       return;
     }
@@ -314,10 +370,12 @@
       <section><h3>Fichiers joints</h3>
         ${toggle('f-on', 'Autoriser les pièces jointes', 'PDF, Word, texte, CSV et Excel.', v.uploads_enabled)}
         ${toggle('a-on', 'Autoriser l’analyse de données', 'Exécution de code d’analyse sur les CSV / Excel, dans le bac à sable isolé.', v.analysis_enabled)}
+        ${toggle('ocr-on', 'Lire les PDF scannés (OCR)', 'Reconnaissance de texte sur les pages en image, dans le bac à sable. Allonge le temps de lecture d’un PDF scanné.', v.ocr_enabled)}
         <div class="op-grid2">
           <div class="op-field"><label for="f-max">Taille maximale (Mo)</label><input type="number" id="f-max" min="1" max="100"></div>
           <div class="op-field"><label for="a-steps">Essais de calcul par question</label><input type="number" id="a-steps" min="1" max="5"></div>
           <div class="op-field"><label for="a-timeout">Durée maximale d’un calcul (s)</label><input type="number" id="a-timeout" min="10" max="300"></div>
+          <div class="op-field"><label for="ocr-max">Pages scannées lues par PDF (OCR)</label><input type="number" id="ocr-max" min="1" max="200"></div>
         </div></section>
       <div class="op-pane-actions"><button type="button" class="op-primary" id="x-save">Enregistrer</button></div>`;
     const $p = (s) => pane.querySelector(s);
@@ -327,12 +385,14 @@
     $p('#f-max').value = v.max_upload_mb;
     $p('#a-steps').value = v.max_analysis_steps;
     $p('#a-timeout').value = v.sandbox_timeout;
+    $p('#ocr-max').value = v.max_ocr_pages;
     $p('#x-save').addEventListener('click', async () => {
       try {
         await saveAppSettings({
           web_enabled: $p('#w-on').checked, web_results: Number($p('#w-results').value), web_pages_read: Number($p('#w-pages').value),
           searxng_url: $p('#w-url').value.trim(), uploads_enabled: $p('#f-on').checked, analysis_enabled: $p('#a-on').checked,
           max_upload_mb: Number($p('#f-max').value), max_analysis_steps: Number($p('#a-steps').value), sandbox_timeout: Number($p('#a-timeout').value),
+          ocr_enabled: $p('#ocr-on').checked, max_ocr_pages: Number($p('#ocr-max').value),
         });
         O.toast('Réglages enregistrés.');
       } catch (e) { O.toast(e.message); }

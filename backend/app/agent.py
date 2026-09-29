@@ -13,14 +13,14 @@ import logging
 import re
 from typing import AsyncIterator
 
-from . import config, ollama, sandbox, settings, web
+from . import config, documents, ollama, sandbox, settings, web
 from .files import file_path
 from .models import Chat, File
 
 log = logging.getLogger("opti.agent")
 
 CODE_BLOCK = re.compile(r"```python[^\n]*\n(.*?)```", re.S)
-SEARCH_BLOCK = re.compile(r"```recherche\n.*?```\n*", re.S)
+SEARCH_BLOCK = re.compile(r"```(?:recherche|lecture)\n.*?```\n*", re.S)   # encarts d'affichage, retirés de l'historique
 
 ANALYSIS_PROMPT = """
 ## Analyse de fichiers de données
@@ -34,22 +34,22 @@ Tu ne vois qu'un aperçu : pour tout chiffre, comptage, statistique, filtre ou e
 """
 
 
-def build_messages(chat: Chat, files: list[File], prefs: settings.UserPrefs | None = None) -> list[dict]:
+DOC_PROMPT = """
+## Documents joints par l'utilisateur
+Appuie-toi sur ces documents pour répondre. Quand tu reprends une information, indique la page concernée entre
+parenthèses, par exemple (p. 12), uniquement si ce numéro figure dans les extraits fournis. N'invente rien : si le
+document ne contient pas la réponse, dis-le.
+"""
+
+
+def build_messages(chat: Chat, files: list[File], prefs: settings.UserPrefs | None = None,
+                   doc_context: str = "") -> list[dict]:
     app = settings.app()
-    docs = [f for f in files if f.kind == "document"]
     data = [f for f in files if f.kind == "data"] if app.analysis_enabled else []
 
     system = app.system_prompt + (settings.prefs_prompt(prefs) if prefs else "")
-    if docs:
-        system += "\n\n## Documents joints par l'utilisateur\n"
-        budget = config.DOC_CHAR_BUDGET
-        per_doc = max(2000, budget // len(docs))
-        for f in docs:
-            text = f.text[:per_doc]
-            cut = len(f.text) > per_doc
-            system += f"\n### Document « {f.filename} »\n{text}\n"
-            if cut:
-                system += f"[… document tronqué : seuls les {per_doc} premiers caractères sur {len(f.text)} sont fournis. Signale-le si la réponse peut en dépendre.]\n"
+    if doc_context:
+        system += DOC_PROMPT + doc_context
     if data:
         system += ANALYSIS_PROMPT
         for f in data:
@@ -74,7 +74,30 @@ def build_messages(chat: Chat, files: list[File], prefs: settings.UserPrefs | No
 async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIterator[str]:
     """web_mode : 'auto' (le modèle décide), 'on' (recherche forcée), 'off' (jamais)."""
     app = settings.app()
-    messages = build_messages(chat, files, settings.user_prefs(chat.owner_id))
+
+    # Documents : entiers s'ils sont courts, sinon passages pertinents ou synthèse (voir documents.py)
+    doc_context, blocks = "", []
+    docs = [f for f in files if f.kind == "document"]
+    if docs:
+        user_msgs = [m.content for m in chat.messages if m.role == "user"]
+        question = user_msgs[-1] if user_msgs else ""
+        search_query = question if len(question) >= 30 or len(user_msgs) < 2 else user_msgs[-2] + " " + question
+        opened = False
+        async for kind, payload in documents.prepare(docs, search_query, documents.is_overview(question), config.DOC_CHAR_BUDGET):
+            if kind == "context":
+                doc_context = payload
+                continue
+            if not opened:
+                yield "```lecture\n"
+                opened = True
+            if kind == "progress":
+                yield json.dumps({"status": "reading", **payload}, ensure_ascii=False) + "\n"
+            else:
+                blocks.append(payload)
+        if opened:
+            yield json.dumps({"status": "done", "docs": blocks}, ensure_ascii=False) + "\n```\n\n"
+
+    messages = build_messages(chat, files, settings.user_prefs(chat.owner_id), doc_context)
     if not app.web_enabled:
         web_mode = "off"
     if not app.analysis_enabled:

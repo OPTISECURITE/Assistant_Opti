@@ -33,6 +33,8 @@ class AppSettings(BaseModel):
     analysis_enabled: bool = True
     max_analysis_steps: int = Field(default=config.MAX_ANALYSIS_STEPS, ge=1, le=5)
     sandbox_timeout: int = Field(default=config.SANDBOX_TIMEOUT, ge=10, le=300)
+    ocr_enabled: bool = True                                   # reconnaissance de texte des PDF scannés
+    max_ocr_pages: int = Field(default=40, ge=1, le=200)
 
 
 class UserPrefs(BaseModel):

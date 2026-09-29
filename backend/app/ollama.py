@@ -61,13 +61,13 @@ def _error_message(raw: str) -> str:
     return "\n\n> ⚠️ Le modèle a renvoyé une erreur. Réessayez ou reformulez votre demande."
 
 
-async def complete(messages: list[dict], json_mode: bool = False) -> str:
-    """Appel court, non diffusé (décision de recherche web)."""
+async def complete(messages: list[dict], json_mode: bool = False, *, num_predict: int = 80, timeout: float = 60.0) -> str:
+    """Appel non diffusé (décision de recherche web, résumés de sections)."""
     payload = {"model": settings.app().model, "messages": messages, "stream": False,
-               "options": {"temperature": 0.1, "num_predict": 80}}
+               "options": {"temperature": 0.1, "num_predict": num_predict}}
     if json_mode:
         payload["format"] = "json"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=timeout, write=30.0, pool=10.0)) as client:
         r = await client.post(f"{config.OLLAMA_URL}/api/chat", json=payload)
         r.raise_for_status()
         return r.json().get("message", {}).get("content", "").strip()

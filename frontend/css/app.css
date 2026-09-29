@@ -206,3 +206,9 @@
   #opti-design .op-tabs button { white-space: nowrap; }
   #opti-design .op-grid2 { grid-template-columns: 1fr; }
 }
+
+/* Erreur dans un formulaire (fenêtres Réglages / Administration) */
+#opti-design .op-form-error { font-size: 11px; color: #a75751; background: color-mix(in srgb, #a75751 8%, transparent); border-radius: 8px; padding: 9px 11px; margin: 4px 0 12px; }
+#opti-design .op-pw-row { display: flex; gap: 8px; align-items: center; }
+#opti-design .op-pw-row input { flex: 1; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .3px; }
+#opti-design .op-pw-row .op-secondary { padding: 8px 14px; white-space: nowrap; }

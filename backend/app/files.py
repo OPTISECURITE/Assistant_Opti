@@ -4,6 +4,7 @@ fichiers de données, suppression.
 """
 import asyncio
 import io
+import json
 import logging
 import re
 import shutil
@@ -42,20 +43,37 @@ def safe_name(filename: str) -> str:
     return (stem[:60] + dot + ext.lower()) if dot else name[:60]
 
 
+def file_meta(f: File) -> dict:
+    """Informations de lecture (pages, OCR…) écrites au dépôt du fichier."""
+    try:
+        return json.loads((file_dir(f.id) / "meta.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def file_summary(f: File) -> dict:
-    return {"id": f.id, "filename": f.filename, "kind": f.kind, "size": f.size}
+    d = {"id": f.id, "filename": f.filename, "kind": f.kind, "size": f.size}
+    m = file_meta(f)
+    for key in ("pages", "ocr_pages", "truncated"):
+        if m.get(key):
+            d[key] = m[key]
+    return d
 
 
 # ── Extraction du texte ──────────────────────────────────────────────────────
 def extract_text(path: Path, ext: str) -> str:
     if ext == ".pdf":
         from pypdf import PdfReader
-        reader = PdfReader(str(path))
-        pages = []
-        for i, page in enumerate(reader.pages, 1):
-            txt = (page.extract_text() or "").strip()
-            if txt:
-                pages.append(f"[Page {i}]\n{txt}")
+        from pypdf.errors import FileNotDecryptedError
+        try:
+            reader = PdfReader(str(path))
+            pages = []
+            for i, page in enumerate(reader.pages, 1):
+                txt = (page.extract_text() or "").strip()
+                if txt:
+                    pages.append(f"[Page {i}]\n{txt}")
+        except FileNotDecryptedError:
+            raise HTTPException(422, "Ce PDF est protégé par un mot de passe : retirez la protection puis redéposez-le.")
         return "\n\n".join(pages)
     if ext == ".docx":
         import docx
@@ -72,6 +90,35 @@ def extract_text(path: Path, ext: str) -> str:
         except UnicodeDecodeError:
             continue
     return ""
+
+
+_pdf_slots = asyncio.Semaphore(2)   # au plus 2 PDF lus en même temps (l'OCR occupe le processeur)
+
+
+async def read_pdf(path: Path, stored_name: str, app) -> tuple[str, dict]:
+    """Texte d'un PDF avec marqueurs [Page N], tableaux en Markdown, OCR des pages scannées."""
+    async with _pdf_slots:
+        try:
+            r = await sandbox.extract_pdf(path, stored_name, ocr=app.ocr_enabled, max_ocr=app.max_ocr_pages,
+                                          max_pages=config.MAX_PDF_PAGES, timeout=config.PDF_TIMEOUT)
+        except Exception as e:
+            # Repli (image du bac à sable ancienne ou indisponible) : lecture simple, sans tableaux ni OCR.
+            log.warning("Lecture du PDF dans le bac à sable impossible (%s) : lecture de secours", str(e)[-200:])
+            text = await asyncio.to_thread(extract_text, path, ".pdf")
+            return text, {"pages": text.count("[Page "), "basic": True}
+
+    pages = [p for p in r["pages"] if p["text"].strip()]
+    text = "\n\n".join(f"[Page {p['n']}]\n{p['text']}" for p in pages)
+    unread = max(0, len(r["weak"]) - r["ocr_done"])
+    meta = {"pages": r["total"], "ocr_pages": r["ocr_done"], "truncated": r["truncated"],
+            "tables": sum(p["tables"] for p in r["pages"]), "scanned_unread": unread}
+    if not text.strip():
+        if r["weak"] and not app.ocr_enabled:
+            raise HTTPException(422, "Ce PDF est un scan (pages en images) et la reconnaissance de texte (OCR) est désactivée par l'administrateur.")
+        if r["weak"] and not r["ocr_available"]:
+            raise HTTPException(422, "Ce PDF est un scan et la reconnaissance de texte (OCR) n'est pas disponible sur le serveur.")
+        raise HTTPException(422, "Aucun texte lisible dans ce PDF (document protégé, vide ou illisible).")
+    return text, meta
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -104,7 +151,11 @@ async def upload(file: UploadFile, user: CurrentUser = Depends(current_user), db
 
     try:
         if f.kind == "document":
-            text = await asyncio.to_thread(extract_text, path, ext)
+            if ext == ".pdf":
+                text, meta = await read_pdf(path, f.stored_name, app)
+                (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+            else:
+                text = await asyncio.to_thread(extract_text, path, ext)
             if not text.strip():
                 raise HTTPException(422, "Aucun texte n'a pu être extrait (document scanné ou protégé ?).")
             f.text = text

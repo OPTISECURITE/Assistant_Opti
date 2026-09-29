@@ -32,6 +32,47 @@
   const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text || ''));
 
   // Affiche une réponse : Markdown + regroupement « code exécuté / résultat » dans un encart repliable
+  // Encart affiché quand un document long est lu : progression, puis pages retrouvées
+  function readingCard(pre) {
+    const info = {};
+    pre.textContent.split('\n').forEach((line) => { try { Object.assign(info, JSON.parse(line)); } catch {} });
+    const running = info.status !== 'done';
+    const card = document.createElement('div');
+    card.className = 'op-sources' + (running ? ' is-running' : '');
+    const head = document.createElement('div');
+    head.className = 'op-sources-head';
+    head.innerHTML = `<i data-lucide="${running ? 'loader-circle' : 'file-search'}"></i><span></span><em></em>`;
+    const label = head.querySelector('span'), sub = head.querySelector('em');
+    const docs = info.docs || [];
+    if (running) {
+      label.textContent = 'Lecture du document en cours…';
+      if (info.total) sub.textContent = `section ${Math.min((info.done || 0) + 1, info.total)} sur ${info.total} · ${info.doc || ''}`;
+    } else {
+      label.textContent = docs.some((d) => d.mode === 'synthese') ? 'Document lu en entier · synthèse par sections' : 'Passages du document retrouvés';
+    }
+    card.appendChild(head);
+    if (!running && docs.length) {
+      const list = document.createElement('ol');
+      docs.forEach((d) => {
+        const li = document.createElement('li');
+        const row = document.createElement('div');
+        row.style.cssText = 'font-size:11px;padding:4px 6px;color:var(--op-muted)';
+        const pages = (d.pages || []);
+        const shown = pages.length > 12 ? pages.slice(0, 12).join(', ') + '…' : pages.join(', ');
+        const detail = d.mode === 'synthese' ? `${d.sections} sections résumées${d.total_pages ? ` · ${d.total_pages} pages` : ''}`
+          : d.matched === false ? 'aucun passage précis trouvé : début du document fourni'
+          : `pages ${shown}${d.total_pages ? ` sur ${d.total_pages}` : ''}`;
+        row.innerHTML = '<b style="color:var(--op-ink);font-weight:600"></b> — <span></span>';
+        row.querySelector('b').textContent = d.name;
+        row.querySelector('span').textContent = detail;
+        li.appendChild(row);
+        list.appendChild(li);
+      });
+      card.appendChild(list);
+    }
+    return card;
+  }
+
   function sourcesCard(pre) {
     let info = {};
     pre.textContent.split('\n').forEach((line) => { try { Object.assign(info, JSON.parse(line)); } catch {} });
@@ -91,6 +132,7 @@
 
   function renderAnswer(el, text) {
     el.innerHTML = renderMarkdown(text);
+    el.querySelectorAll('pre > code.language-lecture').forEach((code) => code.parentElement.replaceWith(readingCard(code.parentElement)));
     let sources = [];
     el.querySelectorAll('pre > code.language-recherche').forEach((code) => {
       const { card, results } = sourcesCard(code.parentElement);
@@ -490,10 +532,18 @@
     files.forEach((f, i) => {
       const chip = document.createElement('span');
       chip.className = 'op-chip' + (f.uploading ? ' is-uploading' : '');
-      chip.innerHTML = `<i data-lucide="${fileIcon(f)}"></i><span></span>${f.size ? `<small>${fmtSize(f.size)}</small>` : ''}` +
+      const bits = [];
+      if (f.uploading) bits.push(/\.pdf$/i.test(f.filename) ? 'lecture…' : 'envoi…');
+      if (f.pages) bits.push(`${f.pages} p.`);
+      if (f.ocr_pages) bits.push('OCR');
+      if (f.size && !f.uploading) bits.push(fmtSize(f.size));
+      chip.innerHTML = `<i data-lucide="${fileIcon(f)}"></i><span></span>${bits.length ? `<small>${esc(bits.join(' · '))}</small>` : ''}` +
         (removable && !f.uploading ? `<button type="button" aria-label="Retirer le fichier" data-remove="${i}"><i data-lucide="x"></i></button>` : '');
       chip.querySelector('span').textContent = f.filename;
-      chip.title = f.filename;
+      chip.title = [f.filename,
+        f.pages ? `${f.pages} page${f.pages > 1 ? 's' : ''}` : '',
+        f.ocr_pages ? `${f.ocr_pages} page${f.ocr_pages > 1 ? 's' : ''} lue${f.ocr_pages > 1 ? 's' : ''} par reconnaissance de texte (OCR)` : '',
+        f.truncated ? 'lecture limitée aux premières pages' : ''].filter(Boolean).join(' · ');
       box.appendChild(chip);
     });
     return box;

@@ -111,6 +111,38 @@ def main():
             print(f"[✓] {n} conversation(s) rattachée(s) à {user.username}.")
 
 
+def tiny_pdf(text: str) -> bytes:
+    """PDF minimal d'une page contenant `text`, écrit à la main (aucune bibliothèque)."""
+    stream = f"BT /F1 14 Tf 20 100 Td ({text}) Tj ET"
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{o}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    out += "".join(f"{o:010d} 00000 n \n" for o in offsets).encode()
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+def test_pdf(tmp: str) -> tuple[bool, bool]:
+    """(lecture d'un PDF réussie, OCR disponible)."""
+    from app import sandbox
+    pdf = Path(tmp) / "test.pdf"
+    pdf.write_bytes(tiny_pdf("Bonjour sandbox"))
+    pdf.chmod(0o644)
+    try:
+        r = asyncio.run(sandbox.extract_pdf(pdf, "test.pdf", ocr=False, max_ocr=1, max_pages=5, timeout=60))
+    except Exception as e:
+        print(f"      → {str(e)[-300:]}")
+        return False, False
+    return "Bonjour sandbox" in r["pages"][0]["text"], bool(r["ocr_available"])
+
+
 def test_sandbox():
     """Vérifie que le bac à sable calcule correctement ET qu'il est bien isolé."""
     from app import config, sandbox
@@ -127,12 +159,16 @@ def test_sandbox():
             ("Pas de privilèges root", "import os\nprint('uid', os.getuid())", True, "uid 10001"),
             ("Pas d'accès aux données de l'application", "import os\nprint(os.path.exists('/opt/assistant-opti'))", True, "False"),
         ]
+        pdf_ok, ocr_ok = test_pdf(tmp)
         failures = 0
         for label, code, want_ok, expect in tests:
             ok, out = asyncio.run(sandbox.run_code(code, [(csv, "test.csv")]))
             good = (ok == want_ok) and (expect is None or expect in out) and "OUVERT" not in out and "POSSIBLE" not in out
             failures += not good
             print(f"  [{'✓' if good else '✗'}] {label}" + ("" if good else f"\n      → {out[-300:]}"))
+    print(f"  [{'✓' if pdf_ok else '✗'}] Lecture d'un PDF dans le bac à sable")
+    print(f"  [{'✓' if ocr_ok else '!'}] OCR des PDF scannés : {'disponible' if ocr_ok else 'indisponible (reconstruire l’image : docker build -t ' + config.SANDBOX_IMAGE + ' deploy/sandbox)'}")
+    failures += not pdf_ok
     if config.SANDBOX_MODE != "docker":
         print("  [!] Mode subprocess : AUCUNE isolation réelle. Ne pas utiliser en production.")
     print("Bac à sable OK." if not failures else f"{failures} test(s) en échec.")
