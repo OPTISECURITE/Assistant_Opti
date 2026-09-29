@@ -45,6 +45,7 @@
           <div class="op-header-left">
             <button type="button" class="op-icon op-mobile-menu" aria-label="Ouvrir la navigation" data-action="nav"><i data-lucide="panel-left"></i></button>
             <span class="op-header-title" id="op-header-title">Assistant Opti</span>
+            <button type="button" class="op-icon op-header-thread" hidden data-action="thread-menu" aria-label="Actions de la conversation" aria-expanded="false"><i data-lucide="ellipsis"></i></button>
             <span class="op-version">IA</span>
           </div>
           <div class="op-header-right">
@@ -112,6 +113,16 @@
 
         <footer class="op-mainfooter"><span>Un assistant pour vos idées. Votre expertise pour décider.</span><span>Les réponses de l’IA sont à vérifier.</span></footer>
       </main>
+    </div>
+
+    <!-- Menu d'actions d'une conversation -->
+    <div class="op-thread-menu" hidden role="menu" aria-label="Actions de la conversation">
+      <div class="op-thread-menu-heading">CONVERSATION</div>
+      <button type="button" role="menuitem" data-action="rename"><i data-lucide="pencil"></i> Renommer</button>
+      <button type="button" role="menuitem" data-action="pin"><i data-lucide="pin"></i> <span>Épingler</span></button>
+      <button type="button" role="menuitem" data-action="download"><i data-lucide="download"></i> Télécharger</button>
+      <div class="op-thread-divider"></div>
+      <button type="button" role="menuitem" class="op-thread-delete" data-action="delete"><i data-lucide="trash-2"></i> Supprimer</button>
     </div>
 
     <!-- Fenêtre modale générique -->

@@ -8,6 +8,8 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]          # /opt/assistant-opti
 FRONTEND_DIR = BASE_DIR / "frontend"
+DATA_DIR = Path(os.getenv("OPTI_DATA_DIR", BASE_DIR / "data"))
+DATABASE_URL = os.getenv("OPTI_DATABASE_URL", f"sqlite:///{DATA_DIR / 'assistant.db'}")
 
 # Ollama tourne sur le même serveur et n'écoute qu'en local.
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
