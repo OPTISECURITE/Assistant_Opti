@@ -834,7 +834,16 @@
   // Si l'utilisateur remonte pendant une réponse, on arrête de le ramener en bas
   $('#op-conversation').addEventListener('scroll', () => { state.follow = isNearBottom(); }, { passive: true });
 
-  $('.op-modal-backdrop').addEventListener('click', (e) => { if (e.target === $('.op-modal-backdrop')) closeModal(); });
+  // Clic à côté d'une fenêtre : il la ferme, sauf pour les grandes fenêtres à onglets (Réglages, Administration) où l'on saisit
+  // des valeurs. Et seulement si le clic a COMMENCÉ à côté : sélectionner du texte dans un champ puis relâcher la souris
+  // hors de la fenêtre ne doit rien fermer.
+  let pressedOnBackdrop = false;
+  $('.op-modal-backdrop').addEventListener('mousedown', (e) => { pressedOnBackdrop = e.target === e.currentTarget; });
+  $('.op-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target !== e.currentTarget || !pressedOnBackdrop) return;
+    if ($('.op-modal').classList.contains('is-wide')) return;
+    closeModal();
+  });
   window.addEventListener('resize', () => closeMenu());
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { closeMenu(true); closeModal(); toggleProfile(false); $('.op-app').classList.remove('op-nav-open'); }

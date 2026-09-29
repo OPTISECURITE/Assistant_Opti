@@ -244,7 +244,7 @@
       <div class="op-inline-form">
         <h3 style="margin-bottom:12px">${isNew ? 'Nouveau compte' : 'Modifier ' + esc(u.username)}</h3>
         <div class="op-grid2">
-          ${isNew ? '<div class="op-field"><label for="f-username">Identifiant</label><input type="text" id="f-username" placeholder="prenom.nom" autocomplete="off"></div>' : ''}
+          ${isNew ? '<div class="op-field"><label for="f-username">Identifiant</label><input type="text" id="f-username" placeholder="initiale.nom (ex. m.chaput)" autocomplete="off"></div>' : ''}
           <div class="op-field"><label for="f-name">Nom affiché</label><input type="text" id="f-name" placeholder="Prénom Nom"></div>
         </div>
         ${isNew ? pwField('f-pass') : ''}
