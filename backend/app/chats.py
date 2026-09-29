@@ -32,6 +32,11 @@ class ChatUpdate(BaseModel):
 class NewMessage(BaseModel):
     content: str = Field(min_length=1, max_length=100_000)
     file_ids: list[str] = Field(default_factory=list, max_length=10)
+    web_search: bool = False
+
+
+class Regenerate(BaseModel):
+    web_search: bool = False
 
 
 def chat_summary(c: Chat) -> dict:
@@ -109,7 +114,7 @@ def delete_chat(chat_id: str, user: CurrentUser = Depends(current_user), db: Ses
 
 
 # ── Génération ───────────────────────────────────────────────────────────────
-async def stream_and_store(chat_id: str) -> AsyncIterator[str]:
+async def stream_and_store(chat_id: str, web_search: bool = False) -> AsyncIterator[str]:
     """
     Envoie l'historique à Ollama et enregistre la réponse au fil de l'eau.
     Si l'utilisateur interrompt (bouton stop / fermeture de l'onglet), la partie
@@ -126,7 +131,7 @@ async def stream_and_store(chat_id: str) -> AsyncIterator[str]:
 
         parts: list[str] = []
         completed = False
-        tokens = agent.run(chat, files)
+        tokens = agent.run(chat, files, web_search)
         try:
             async for token in tokens:
                 parts.append(token)
@@ -144,9 +149,9 @@ async def stream_and_store(chat_id: str) -> AsyncIterator[str]:
         db.close()
 
 
-def streaming(chat_id: str) -> StreamingResponse:
+def streaming(chat_id: str, web_search: bool = False) -> StreamingResponse:
     return StreamingResponse(
-        stream_and_store(chat_id),
+        stream_and_store(chat_id, web_search),
         media_type="text/plain; charset=utf-8",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -171,11 +176,12 @@ def send_message(chat_id: str, body: NewMessage,
         f.chat_id, f.message_id = chat.id, msg.id
     chat.updated_at = now_ms()
     db.commit()
-    return streaming(chat.id)
+    return streaming(chat.id, body.web_search)
 
 
 @router.post("/{chat_id}/regenerate")
-def regenerate(chat_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+def regenerate(chat_id: str, body: Regenerate | None = None,
+               user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     chat = get_owned_chat(db, chat_id, user)
     if not chat.messages:
         raise HTTPException(status_code=400, detail="Conversation vide")
@@ -183,4 +189,4 @@ def regenerate(chat_id: str, user: CurrentUser = Depends(current_user), db: Sess
     if last.role == "assistant":
         db.delete(last)
         db.commit()
-    return streaming(chat.id)
+    return streaming(chat.id, bool(body and body.web_search))

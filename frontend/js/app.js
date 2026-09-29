@@ -20,6 +20,7 @@
     menuChat: null,     // conversation visée par le menu « … »
     menuAnchor: null,
     pending: [],        // pièces jointes en attente d'envoi : { id?, filename, kind, uploading }
+    web: false,         // recherche web activée pour les prochains messages
   };
 
   // ── Utilitaires ───────────────────────────────────────────────────────────
@@ -29,13 +30,76 @@
   const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text || ''));
 
   // Affiche une réponse : Markdown + regroupement « code exécuté / résultat » dans un encart repliable
+  function sourcesCard(pre) {
+    let info = {};
+    pre.textContent.split('\n').forEach((line) => { try { Object.assign(info, JSON.parse(line)); } catch {} });
+    const card = document.createElement('div');
+    const running = info.status !== 'done';
+    card.className = 'op-sources' + (running ? ' is-running' : '');
+    const head = document.createElement('div');
+    head.className = 'op-sources-head';
+    head.innerHTML = `<i data-lucide="${running ? 'loader-circle' : 'globe'}"></i><span></span><em></em>`;
+    head.querySelector('span').textContent = running ? 'Recherche sur le web…'
+      : info.results?.length ? `Recherche web · ${info.results.length} source${info.results.length > 1 ? 's' : ''}` : 'Recherche web · aucun résultat';
+    if (info.query) head.querySelector('em').textContent = `« ${info.query} »`;
+    card.appendChild(head);
+    if (info.results?.length) {
+      const list = document.createElement('ol');
+      info.results.forEach((r, i) => {
+        if (!/^https?:\/\//.test(r.url)) return;
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = r.url;
+        a.innerHTML = '<b></b><span></span><small></small>';
+        a.querySelector('b').textContent = `[${i + 1}]`;
+        a.querySelector('span').textContent = r.title;
+        try { a.querySelector('small').textContent = new URL(r.url).hostname.replace(/^www\./, ''); } catch {}
+        li.appendChild(a);
+        list.appendChild(li);
+      });
+      card.appendChild(list);
+    }
+    return { card, results: info.results || [] };
+  }
+
+  // Transforme les [1], [2]… du texte en liens vers les sources
+  function linkCitations(el, results) {
+    if (!results.length) return;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement.closest('pre, code, a, .op-sources') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    const nodes = [];
+    while (walker.nextNode()) if (/\[\d{1,2}\]/.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
+    nodes.forEach((node) => {
+      const frag = document.createDocumentFragment();
+      node.nodeValue.split(/(\[\d{1,2}\])/).forEach((part) => {
+        const m = part.match(/^\[(\d{1,2})\]$/);
+        const src = m && results[Number(m[1]) - 1];
+        if (src && /^https?:\/\//.test(src.url)) {
+          const a = document.createElement('a');
+          a.className = 'op-cite'; a.href = src.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+          a.title = src.title; a.textContent = m[1];
+          frag.appendChild(a);
+        } else frag.appendChild(document.createTextNode(part));
+      });
+      node.replaceWith(frag);
+    });
+  }
+
   function renderAnswer(el, text) {
     el.innerHTML = renderMarkdown(text);
+    let sources = [];
+    el.querySelectorAll('pre > code.language-recherche').forEach((code) => {
+      const { card, results } = sourcesCard(code.parentElement);
+      code.parentElement.replaceWith(card);
+      sources = results;
+    });
+    linkCitations(el, sources);
     el.querySelectorAll('pre > code.language-python').forEach((code) => {
       const pre = code.parentElement;
       const next = pre.nextElementSibling;
       const result = next?.matches('pre') && next.querySelector('code.language-resultat') ? next : null;
-      const out = result?.innerText || '';
+      const out = result?.textContent || '';
       const failed = /^(Traceback|Erreur)/.test(out.trim());
       const box = document.createElement('details');
       box.className = 'op-analysis' + (!result ? ' is-running' : failed ? ' is-error' : '');
@@ -318,7 +382,7 @@
     renderPending();
     state.active.messages.push({ role: 'user', content: text, done: true, files });
     showConversation();
-    await generate(`/api/chats/${state.active.id}/messages`, { content: text, file_ids: files.map((f) => f.id) });
+    await generate(`/api/chats/${state.active.id}/messages`, { content: text, file_ids: files.map((f) => f.id), web_search: state.web });
   }
 
   async function regenerate() {
@@ -326,7 +390,7 @@
     if (!chat || state.controller) return;
     if (chat.messages.at(-1)?.role === 'assistant') chat.messages.pop();
     renderThread();
-    await generate(`/api/chats/${chat.id}/regenerate`);
+    await generate(`/api/chats/${chat.id}/regenerate`, { web_search: state.web });
   }
 
   async function generate(url, body) {
@@ -387,6 +451,16 @@
       $('#op-chat-question').focus();
     }
     refreshChats();
+  }
+
+  // ── Recherche web ─────────────────────────────────────────────────────────
+  function setWeb(on) {
+    state.web = on;
+    $$('[data-action="toggle-web"]').forEach((b) => b.setAttribute('aria-pressed', String(on)));
+    $$('[data-action="tools"]').forEach((b) => {
+      b.classList.toggle('is-on', on);
+      b.querySelector('span').textContent = on ? 'Outils · Web' : 'Outils';
+    });
   }
 
   // ── Pièces jointes ────────────────────────────────────────────────────────
@@ -506,7 +580,18 @@
     'close-modal': closeModal,
     soon: () => toast('Fonctionnalité prévue dans une prochaine étape.'),
     'thread-menu': openMenu,
-    attach: () => $('#op-file-input').click(),
+    attach: () => { closeModal(); $('#op-file-input').click(); },
+    'toggle-web': () => { setWeb(!state.web); toast(state.web ? 'Recherche web activée pour vos prochains messages.' : 'Recherche web désactivée.'); },
+    tools: () => {
+      modal('Outils de l’assistant',
+        `<label class="op-switch-row"><input type="checkbox" id="op-web-switch"><span>Recherche web
+           <small>L’assistant cherche sur Internet et cite ses sources. Aucune donnée interne n’est envoyée.</small></span><i data-lucide="globe"></i></label>
+         <button type="button" class="op-modal-row" data-action="attach"><i data-lucide="paperclip"></i><span>Joindre un fichier
+           <small style="display:block">PDF, Word, texte, CSV ou Excel. Les données sont analysées sur le fichier complet.</small></span><i data-lucide="chevron-right"></i></button>`);
+      const sw = $('#op-web-switch');
+      sw.checked = state.web;
+      sw.addEventListener('change', () => setWeb(sw.checked));
+    },
     'analysis-info': () => toast('L’analyse de données s’active automatiquement quand vous joignez un fichier CSV ou Excel.'),
     regenerate,
 

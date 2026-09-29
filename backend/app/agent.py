@@ -8,17 +8,19 @@ Construction du contexte envoyé au modèle et boucle d'analyse de données.
    le bac à sable, on affiche la sortie puis on lui redonne la main. Au plus
    MAX_ANALYSIS_STEPS exécutions.
 """
+import json
 import logging
 import re
 from typing import AsyncIterator
 
-from . import config, ollama, sandbox
+from . import config, ollama, sandbox, web
 from .files import file_path
 from .models import Chat, File
 
 log = logging.getLogger("opti.agent")
 
 CODE_BLOCK = re.compile(r"```python[^\n]*\n(.*?)```", re.S)
+SEARCH_BLOCK = re.compile(r"```recherche\n.*?```\n*", re.S)
 
 ANALYSIS_PROMPT = """
 ## Analyse de fichiers de données
@@ -59,7 +61,8 @@ def build_messages(chat: Chat, files: list[File]) -> list[dict]:
             continue
         if used + len(m.content) > config.HISTORY_CHAR_BUDGET and history:
             break
-        history.append({"role": m.role, "content": m.content})
+        content = SEARCH_BLOCK.sub("", m.content) if m.role == "assistant" else m.content
+        history.append({"role": m.role, "content": content})
         used += len(m.content)
     history.reverse()
     if history and history[0]["role"] == "assistant":
@@ -67,8 +70,17 @@ def build_messages(chat: Chat, files: list[File]) -> list[dict]:
     return [{"role": "system", "content": system}, *history]
 
 
-async def run(chat: Chat, files: list[File]) -> AsyncIterator[str]:
+async def run(chat: Chat, files: list[File], web_search: bool = False) -> AsyncIterator[str]:
     messages = build_messages(chat, files)
+
+    if web_search:
+        # Encart « recherche » affiché avant la réponse (une ligne JSON par état)
+        yield "```recherche\n" + json.dumps({"status": "searching"}) + "\n"
+        query, results = await web.search(messages[1:])
+        shown = [{"title": r["title"], "url": r["url"]} for r in results]
+        yield json.dumps({"status": "done", "query": query, "results": shown}, ensure_ascii=False) + "\n```\n\n"
+        messages[0]["content"] += web.format_for_model(query, results)
+
     data_files = [(file_path(f), f.stored_name) for f in files if f.kind == "data"]
     steps = 0
 

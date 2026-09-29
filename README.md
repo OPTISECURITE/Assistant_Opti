@@ -22,6 +22,7 @@ navigateur ──HTTP──> backend FastAPI (port 8100) ──> Ollama (127.0.0
 - `backend/app/agent.py`  : contexte envoyé au modèle et boucle d'analyse de données
 - `backend/app/sandbox.py`: exécution isolée du code d'analyse (conteneur Docker jetable)
 - `deploy/sandbox/`       : image Docker du bac à sable
+- `backend/app/web.py`    : recherche web (SearXNG), lecture des pages, protection SSRF
 - `frontend/` : interface issue de la maquette Opti (`css/opti.css` = CSS de la maquette, `css/app.css` = compléments)
 
 ## Installation
@@ -43,10 +44,10 @@ Interface : `http://<serveur>:8100`
 1. ✅ Chat en streaming, design de la maquette, thème clair/sombre/système
 2. ✅ Persistance des conversations (renommer, épingler, télécharger, supprimer, recherche)
 3. ✅ Connexion par comptes locaux, « Bonjour [prénom] », menu profil
-5. Authentification LDAP (AD AMG.lan) en complément des comptes locaux, HTTPS
 4. ✅ Pièces jointes : documents (PDF, Word, texte) et analyse de données (CSV, Excel) sur le fichier complet
-6. Recherche web (SearXNG)
-7. Bases documentaires (RAG)
+5. ✅ Recherche web via SearXNG (opt-in, sources citées, protection SSRF)
+6. Bases documentaires (RAG)
+7. Authentification LDAP (AD AMG.lan) en complément des comptes locaux, HTTPS
 
 ## Sauvegarde
 

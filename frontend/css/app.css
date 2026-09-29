@@ -107,3 +107,24 @@
 #opti-design .op-analysis.is-running > summary svg:first-child { animation: op-spin 1s linear infinite; }
 #opti-design .op-analysis pre { margin: 0 12px 12px; }
 #opti-design .op-analysis .op-analysis-label { font-size: 10px; letter-spacing: 1px; color: var(--op-faint); margin: 2px 12px 5px; font-weight: 600; }
+
+/* ===== Recherche web ===== */
+#opti-design .op-sources { border: 1px solid var(--op-border); border-radius: 10px; background: var(--op-surface); margin: 0 0 14px; padding: 10px 12px; }
+#opti-design .op-sources-head { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; color: var(--op-muted); }
+#opti-design .op-sources-head svg { width: 14px; height: 14px; color: var(--op-blue); flex-shrink: 0; }
+#opti-design .op-sources.is-running .op-sources-head svg { animation: op-spin 1s linear infinite; }
+#opti-design .op-sources-head em { font-style: normal; font-weight: 500; color: var(--op-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#opti-design .op-sources ol { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 2px; }
+#opti-design .op-sources li { margin: 0; }
+#opti-design .op-sources a { display: flex; gap: 8px; align-items: baseline; font-size: 11px; color: var(--op-ink); text-decoration: none; padding: 4px 6px; border-radius: 6px; }
+#opti-design .op-sources a:hover { background: var(--op-soft); color: var(--op-blue); }
+#opti-design .op-sources a b { color: var(--op-blue); font-weight: 600; flex-shrink: 0; }
+#opti-design .op-sources a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#opti-design .op-sources a small { color: var(--op-faint); flex-shrink: 0; margin-left: auto; }
+#opti-design .op-cite { display: inline-block; font-size: 10px; font-weight: 600; line-height: 1; color: var(--op-blue); background: var(--op-soft); border-radius: 4px; padding: 2px 4px; margin: 0 1px; text-decoration: none; vertical-align: 1px; }
+#opti-design .op-cite:hover { background: var(--op-blue); color: var(--op-on-blue, #fff); }
+#opti-design .op-tool-label.is-on { color: var(--op-blue); font-weight: 600; }
+#opti-design .op-switch-row { display: flex; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--op-border); font-size: 12px; cursor: pointer; }
+#opti-design .op-switch-row input { width: 18px; height: 18px; margin: 0; accent-color: var(--op-blue); }
+#opti-design .op-switch-row span { flex: 1; }
+#opti-design .op-switch-row small { display: block; font-size: 11px; color: var(--op-faint); }

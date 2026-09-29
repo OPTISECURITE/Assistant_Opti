@@ -49,3 +49,9 @@ SANDBOX_IMAGE = os.getenv("OPTI_SANDBOX_IMAGE", "opti-sandbox:1")
 SANDBOX_TIMEOUT = int(os.getenv("OPTI_SANDBOX_TIMEOUT", "60"))
 SANDBOX_MEMORY = os.getenv("OPTI_SANDBOX_MEMORY", "2g")
 MAX_ANALYSIS_STEPS = int(os.getenv("OPTI_MAX_ANALYSIS_STEPS", "3"))
+
+# Recherche web (SearXNG installé sur le serveur)
+SEARXNG_URL = os.getenv("OPTI_SEARXNG_URL", "http://127.0.0.1:8888")
+WEB_RESULTS = int(os.getenv("OPTI_WEB_RESULTS", "5"))        # résultats donnés au modèle
+WEB_PAGES_READ = int(os.getenv("OPTI_WEB_PAGES_READ", "3"))  # pages lues en entier parmi eux
+WEB_PAGE_CHARS = int(os.getenv("OPTI_WEB_PAGE_CHARS", "3500"))
