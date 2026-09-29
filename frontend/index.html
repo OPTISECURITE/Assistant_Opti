@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Assistant Opti Sécurité</title>
+  <link rel="icon" type="image/png" href="/static/img/mark.png">
+  <link rel="stylesheet" href="/static/css/opti.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<div id="opti-design" aria-label="Assistant Opti Sécurité">
+  <div class="op-window">
+    <div class="op-app">
+
+      <!-- ===== Barre latérale ===== -->
+      <aside class="op-sidebar" aria-label="Navigation principale">
+        <button type="button" class="op-icon op-nav-close" aria-label="Fermer la navigation" data-action="nav"><i data-lucide="x"></i></button>
+        <div class="op-brand"><img src="/static/img/logo.png" alt="Opti Sécurité"><span>VOTRE ASSISTANT PROFESSIONNEL</span></div>
+        <button type="button" class="op-new op-primary" data-action="new"><i data-lucide="plus"></i> Nouvelle conversation</button>
+        <nav class="op-mainnav" aria-label="Outils">
+          <button type="button" data-action="search"><i data-lucide="search"></i> Rechercher <span class="op-key">Ctrl K</span></button>
+          <button type="button" data-action="soon"><i data-lucide="notebook-pen"></i> Mes notes</button>
+          <button type="button" data-action="soon"><i data-lucide="layout-grid"></i> Espace de travail</button>
+        </nav>
+        <div class="op-navsection"><span>DOSSIERS</span><button type="button" aria-label="Créer un dossier" data-action="soon"><i data-lucide="plus"></i></button></div>
+        <div class="op-navsection op-history-label"><span>CONVERSATIONS</span><i data-lucide="messages-square"></i></div>
+        <div class="op-recents" id="op-recents"></div>
+        <div class="op-sidebar-bottom">
+          <button type="button" class="op-help" data-action="help"><i data-lucide="circle-help"></i> Bien démarrer</button>
+          <div class="op-profile-anchor">
+            <button type="button" class="op-profile" data-action="settings">
+              <span class="op-avatar" id="op-avatar">?<span class="op-online"></span></span>
+              <span class="op-profile-text"><strong id="op-username">Invité</strong><small>Mon espace personnel</small></span>
+              <i data-lucide="settings-2"></i>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ===== Zone principale ===== -->
+      <main class="op-main">
+        <header class="op-header">
+          <div class="op-header-left">
+            <button type="button" class="op-icon op-mobile-menu" aria-label="Ouvrir la navigation" data-action="nav"><i data-lucide="panel-left"></i></button>
+            <span class="op-header-title" id="op-header-title">Assistant Opti</span>
+            <span class="op-version">IA</span>
+          </div>
+          <div class="op-header-right">
+            <span class="op-workspace-label">Espace collaborateurs</span>
+            <button type="button" class="op-icon" aria-label="Réglages" data-action="settings"><i data-lucide="sliders-horizontal"></i></button>
+          </div>
+        </header>
+
+        <!-- Accueil -->
+        <section class="op-home" id="op-home">
+          <div class="op-waves" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="op-home-inner">
+            <div class="op-welcome"><img src="/static/img/mark.png" alt="" class="op-assistant-mark"><span id="op-greeting">BONJOUR</span></div>
+            <h1>L’expertise Opti,<br><em>à votre service.</em></h1>
+            <p class="op-intro">Une question, un document, une idée.<br>Avançons ensemble sur vos missions du quotidien.</p>
+            <form class="op-composer" id="op-home-form" aria-label="Nouvelle question">
+              <label class="op-sr" for="op-question">Votre message à l’assistant</label>
+              <textarea id="op-question" rows="2" placeholder="Comment puis-je vous aider aujourd’hui ?"></textarea>
+              <div class="op-composer-tools">
+                <div class="op-composer-left">
+                  <button type="button" class="op-icon" aria-label="Joindre un document" data-action="soon"><i data-lucide="paperclip"></i></button>
+                  <span class="op-tool-separator"></span>
+                  <button type="button" class="op-tool-label" data-action="soon"><i data-lucide="sliders-horizontal"></i> Outils</button>
+                </div>
+                <div class="op-composer-right">
+                  <button type="button" class="op-model" data-action="model"><span class="op-model-dot"></span> Opti · Qwen 3 <i data-lucide="chevron-down"></i></button>
+                  <button type="button" class="op-icon op-mic" aria-label="Dicter un message" data-action="soon"><i data-lucide="mic"></i></button>
+                  <button type="submit" class="op-send" aria-label="Envoyer le message"><i data-lucide="arrow-up"></i></button>
+                </div>
+              </div>
+            </form>
+            <div class="op-suggestion-label">UN POINT DE DÉPART POUR VOTRE JOURNÉE</div>
+            <div class="op-suggestions">
+              <button type="button" data-prompt="Aide-moi à synthétiser un rapport d’intervention."><span class="op-suggestion-top"><i data-lucide="file-text"></i><i data-lucide="arrow-up-right"></i></span><strong>Synthétiser</strong><span>Aller à l’essentiel <br>d’un rapport</span></button>
+              <button type="button" data-prompt="Aide-moi à rédiger une réponse claire à un client."><span class="op-suggestion-top"><i data-lucide="pen-line"></i><i data-lucide="arrow-up-right"></i></span><strong>Rédiger</strong><span>Trouver les mots justes <br>pour un client</span></button>
+              <button type="button" data-prompt="Aide-moi à préparer une visite de maintenance."><span class="op-suggestion-top"><i data-lucide="clipboard-check"></i><i data-lucide="arrow-up-right"></i></span><strong>Préparer</strong><span>Organiser une visite <br>de maintenance</span></button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Conversation -->
+        <section class="op-conversation" id="op-conversation" hidden aria-label="Conversation" aria-live="polite">
+          <div class="op-chat-content" id="op-thread"></div>
+          <div class="op-chat-dock">
+            <form class="op-composer op-chat-composer" id="op-chat-form" aria-label="Poursuivre la conversation">
+              <label class="op-sr" for="op-chat-question">Votre message dans la conversation</label>
+              <textarea id="op-chat-question" rows="2" placeholder="Poursuivez la conversation…"></textarea>
+              <div class="op-composer-tools">
+                <div class="op-composer-left">
+                  <button type="button" class="op-icon" aria-label="Joindre un document" data-action="soon"><i data-lucide="paperclip"></i></button>
+                  <span class="op-tool-separator"></span>
+                  <button type="button" class="op-icon op-context-tool" aria-label="Recherche web" data-action="soon"><i data-lucide="globe"></i></button>
+                  <button type="button" class="op-icon op-context-tool" aria-label="Analyse de données" data-action="soon"><i data-lucide="terminal"></i></button>
+                </div>
+                <div class="op-composer-right">
+                  <button type="button" class="op-model" data-action="model"><span class="op-model-dot"></span> Opti · Qwen 3 <i data-lucide="chevron-down"></i></button>
+                  <button type="button" class="op-icon op-mic" aria-label="Dicter un message" data-action="soon"><i data-lucide="mic"></i></button>
+                  <button type="submit" class="op-send" aria-label="Envoyer dans la conversation"><i data-lucide="arrow-up"></i></button>
+                </div>
+              </div>
+            </form>
+            <div class="op-chat-disclaimer">Les réponses de l’IA sont à vérifier. Votre expertise reste essentielle.</div>
+          </div>
+        </section>
+
+        <footer class="op-mainfooter"><span>Un assistant pour vos idées. Votre expertise pour décider.</span><span>Les réponses de l’IA sont à vérifier.</span></footer>
+      </main>
+    </div>
+
+    <!-- Fenêtre modale générique -->
+    <div class="op-modal-backdrop" hidden>
+      <section class="op-modal" role="dialog" aria-modal="true" aria-labelledby="op-modal-title">
+        <header><h2 id="op-modal-title"></h2><button type="button" class="op-icon" aria-label="Fermer" data-action="close-modal"><i data-lucide="x"></i></button></header>
+        <div class="op-modal-body"></div>
+      </section>
+    </div>
+    <div class="op-toast" role="status" hidden></div>
+  </div>
+</div>
+
+<!-- Bibliothèques servies en local -->
+<script src="/static/vendor/lucide.min.js"></script>
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

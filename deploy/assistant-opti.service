@@ -1,0 +1,18 @@
+[Unit]
+Description=Assistant Opti (interface web + API)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/assistant-opti
+EnvironmentFile=-/opt/assistant-opti/.env
+ExecStart=/opt/assistant-opti/venv/bin/uvicorn --app-dir backend app.main:app --host ${OPTI_HOST} --port ${OPTI_PORT}
+Restart=on-failure
+RestartSec=5
+# Durcissement de base
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
