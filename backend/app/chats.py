@@ -32,11 +32,11 @@ class ChatUpdate(BaseModel):
 class NewMessage(BaseModel):
     content: str = Field(min_length=1, max_length=100_000)
     file_ids: list[str] = Field(default_factory=list, max_length=10)
-    web_search: bool = False
+    web_mode: str = Field(default="auto", pattern="^(auto|on|off)$")
 
 
 class Regenerate(BaseModel):
-    web_search: bool = False
+    web_mode: str = Field(default="auto", pattern="^(auto|on|off)$")
 
 
 def chat_summary(c: Chat) -> dict:
@@ -114,7 +114,7 @@ def delete_chat(chat_id: str, user: CurrentUser = Depends(current_user), db: Ses
 
 
 # ── Génération ───────────────────────────────────────────────────────────────
-async def stream_and_store(chat_id: str, web_search: bool = False) -> AsyncIterator[str]:
+async def stream_and_store(chat_id: str, web_mode: str = "auto") -> AsyncIterator[str]:
     """
     Envoie l'historique à Ollama et enregistre la réponse au fil de l'eau.
     Si l'utilisateur interrompt (bouton stop / fermeture de l'onglet), la partie
@@ -131,7 +131,7 @@ async def stream_and_store(chat_id: str, web_search: bool = False) -> AsyncItera
 
         parts: list[str] = []
         completed = False
-        tokens = agent.run(chat, files, web_search)
+        tokens = agent.run(chat, files, web_mode)
         try:
             async for token in tokens:
                 parts.append(token)
@@ -149,9 +149,9 @@ async def stream_and_store(chat_id: str, web_search: bool = False) -> AsyncItera
         db.close()
 
 
-def streaming(chat_id: str, web_search: bool = False) -> StreamingResponse:
+def streaming(chat_id: str, web_mode: str = "auto") -> StreamingResponse:
     return StreamingResponse(
-        stream_and_store(chat_id, web_search),
+        stream_and_store(chat_id, web_mode),
         media_type="text/plain; charset=utf-8",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -176,7 +176,7 @@ def send_message(chat_id: str, body: NewMessage,
         f.chat_id, f.message_id = chat.id, msg.id
     chat.updated_at = now_ms()
     db.commit()
-    return streaming(chat.id, body.web_search)
+    return streaming(chat.id, body.web_mode)
 
 
 @router.post("/{chat_id}/regenerate")
@@ -189,4 +189,4 @@ def regenerate(chat_id: str, body: Regenerate | None = None,
     if last.role == "assistant":
         db.delete(last)
         db.commit()
-    return streaming(chat.id, bool(body and body.web_search))
+    return streaming(chat.id, body.web_mode if body else "auto")

@@ -20,7 +20,8 @@
     menuChat: null,     // conversation visée par le menu « … »
     menuAnchor: null,
     pending: [],        // pièces jointes en attente d'envoi : { id?, filename, kind, uploading }
-    web: false,         // recherche web activée pour les prochains messages
+    webForced: false,   // bouton globe : recherche forcée pour les prochains messages
+    follow: true,       // suivre la réponse en bas de l'écran (désactivé si l'utilisateur remonte)
   };
 
   // ── Utilitaires ───────────────────────────────────────────────────────────
@@ -39,8 +40,9 @@
     const head = document.createElement('div');
     head.className = 'op-sources-head';
     head.innerHTML = `<i data-lucide="${running ? 'loader-circle' : 'globe'}"></i><span></span><em></em>`;
-    head.querySelector('span').textContent = running ? 'Recherche sur le web…'
-      : info.results?.length ? `Recherche web · ${info.results.length} source${info.results.length > 1 ? 's' : ''}` : 'Recherche web · aucun résultat';
+    const label = info.auto ? 'Recherche web automatique' : 'Recherche web';
+    head.querySelector('span').textContent = running ? `${label} en cours…`
+      : info.results?.length ? `${label} · ${info.results.length} source${info.results.length > 1 ? 's' : ''}` : `${label} · aucun résultat`;
     if (info.query) head.querySelector('em').textContent = `« ${info.query} »`;
     card.appendChild(head);
     if (info.results?.length) {
@@ -268,6 +270,8 @@
   }
 
   const scrollToBottom = () => { const c = $('#op-conversation'); c.scrollTop = c.scrollHeight; };
+  const isNearBottom = () => { const c = $('#op-conversation'); return c.scrollHeight - c.scrollTop - c.clientHeight < 80; };
+  const follow = () => { if (state.follow) scrollToBottom(); };
 
   // ── Historique dans la barre latérale ─────────────────────────────────────
   function periodOf(ts) {
@@ -382,7 +386,7 @@
     renderPending();
     state.active.messages.push({ role: 'user', content: text, done: true, files });
     showConversation();
-    await generate(`/api/chats/${state.active.id}/messages`, { content: text, file_ids: files.map((f) => f.id), web_search: state.web });
+    await generate(`/api/chats/${state.active.id}/messages`, { content: text, file_ids: files.map((f) => f.id), web_mode: webModeFor() });
   }
 
   async function regenerate() {
@@ -390,7 +394,7 @@
     if (!chat || state.controller) return;
     if (chat.messages.at(-1)?.role === 'assistant') chat.messages.pop();
     renderThread();
-    await generate(`/api/chats/${chat.id}/regenerate`, { web_search: state.web });
+    await generate(`/api/chats/${chat.id}/regenerate`, { web_mode: webModeFor() });
   }
 
   async function generate(url, body) {
@@ -400,6 +404,7 @@
     exchange.appendChild(block);
     icons();
     const contentEl = block.querySelector('.op-answer-content');
+    state.follow = true;
     scrollToBottom();
 
     const controller = new AbortController();
@@ -407,7 +412,7 @@
     setBusy(true);
 
     let full = '', pending = false, failed = false;
-    const paint = () => { pending = false; renderAnswer(contentEl, full); icons(); scrollToBottom(); };
+    const paint = () => { pending = false; renderAnswer(contentEl, full); icons(); follow(); };
 
     try {
       const resp = await fetch(url, {
@@ -437,9 +442,14 @@
     // On recharge la conversation depuis le serveur : c'est lui qui fait foi.
     if (state.active?.id === chatId) {
       if (!failed) await new Promise((r) => setTimeout(r, 150)); // laisse le serveur enregistrer une réponse interrompue
+      const pane = $('#op-conversation');
+      const keepTop = pane.scrollTop;
+      const openBoxes = [...$$('#op-thread details')].map((d) => d.open);
       try {
         state.active = await api(`/api/chats/${chatId}`);
         showConversation();
+        $$('#op-thread details').forEach((d, i) => { if (openBoxes[i]) d.open = true; });
+        pane.scrollTop = keepTop;   // on ne déplace pas la lecture de l'utilisateur
       } catch { /* affichage local conservé */ }
       if (failed) {
         const errBox = document.createElement('div');
@@ -447,16 +457,21 @@
         errBox.textContent = 'Impossible de joindre l’assistant pour le moment. Réessayez dans un instant.';
         $('#op-thread').lastElementChild?.appendChild(errBox);
       }
-      scrollToBottom();
-      $('#op-chat-question').focus();
+      follow();
+      $('#op-chat-question').focus({ preventScroll: true });
     }
     refreshChats();
   }
 
-  // ── Recherche web ─────────────────────────────────────────────────────────
-  function setWeb(on) {
-    state.web = on;
-    $$('[data-action="toggle-web"]').forEach((b) => b.setAttribute('aria-pressed', String(on)));
+  // ── Recherche web : automatique par défaut, forçable avec le globe ─────────
+  const getWebMode = () => { try { return localStorage.getItem('op-web-mode') || 'auto'; } catch { return 'auto'; } };
+  const webModeFor = () => (state.webForced ? 'on' : getWebMode());
+  function setWebForced(on) {
+    state.webForced = on;
+    $$('[data-action="toggle-web"]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(on));
+      b.title = on ? 'Recherche web forcée (cliquer pour revenir au mode automatique)' : 'Forcer une recherche web';
+    });
     $$('[data-action="tools"]').forEach((b) => {
       b.classList.toggle('is-on', on);
       b.querySelector('span').textContent = on ? 'Outils · Web' : 'Outils';
@@ -581,16 +596,24 @@
     soon: () => toast('Fonctionnalité prévue dans une prochaine étape.'),
     'thread-menu': openMenu,
     attach: () => { closeModal(); $('#op-file-input').click(); },
-    'toggle-web': () => { setWeb(!state.web); toast(state.web ? 'Recherche web activée pour vos prochains messages.' : 'Recherche web désactivée.'); },
+    'toggle-web': () => {
+      setWebForced(!state.webForced);
+      toast(state.webForced ? 'Recherche web forcée pour vos prochains messages.' : 'Retour au mode automatique : l’assistant cherche sur le web seulement si nécessaire.');
+    },
     tools: () => {
       modal('Outils de l’assistant',
-        `<label class="op-switch-row"><input type="checkbox" id="op-web-switch"><span>Recherche web
-           <small>L’assistant cherche sur Internet et cite ses sources. Aucune donnée interne n’est envoyée.</small></span><i data-lucide="globe"></i></label>
+        `<label for="op-web-mode">Recherche web</label>
+         <select id="op-web-mode">
+           <option value="auto">Automatique : seulement si l’information est nécessaire</option>
+           <option value="on">Toujours</option>
+           <option value="off">Jamais</option>
+         </select>
+         <p style="margin:0 0 6px;font-size:11px">Les requêtes sont anonymisées et affichées au-dessus de la réponse. Le bouton globe d’une conversation force une recherche.</p>
          <button type="button" class="op-modal-row" data-action="attach"><i data-lucide="paperclip"></i><span>Joindre un fichier
            <small style="display:block">PDF, Word, texte, CSV ou Excel. Les données sont analysées sur le fichier complet.</small></span><i data-lucide="chevron-right"></i></button>`);
-      const sw = $('#op-web-switch');
-      sw.checked = state.web;
-      sw.addEventListener('change', () => setWeb(sw.checked));
+      const sel = $('#op-web-mode');
+      sel.value = getWebMode();
+      sel.addEventListener('change', () => { try { localStorage.setItem('op-web-mode', sel.value); } catch {} });
     },
     'analysis-info': () => toast('L’analyse de données s’active automatiquement quand vous joignez un fichier CSV ou Excel.'),
     regenerate,
@@ -728,6 +751,9 @@
   }
   bindComposer('#op-home-form', '#op-question');
   bindComposer('#op-chat-form', '#op-chat-question');
+
+  // Si l'utilisateur remonte pendant une réponse, on arrête de le ramener en bas
+  $('#op-conversation').addEventListener('scroll', () => { state.follow = isNearBottom(); }, { passive: true });
 
   $('.op-modal-backdrop').addEventListener('click', (e) => { if (e.target === $('.op-modal-backdrop')) closeModal(); });
   window.addEventListener('resize', () => closeMenu());

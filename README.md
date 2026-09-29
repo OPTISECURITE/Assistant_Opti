@@ -45,7 +45,7 @@ Interface : `http://<serveur>:8100`
 2. ✅ Persistance des conversations (renommer, épingler, télécharger, supprimer, recherche)
 3. ✅ Connexion par comptes locaux, « Bonjour [prénom] », menu profil
 4. ✅ Pièces jointes : documents (PDF, Word, texte) et analyse de données (CSV, Excel) sur le fichier complet
-5. ✅ Recherche web via SearXNG (opt-in, sources citées, protection SSRF)
+5. ✅ Recherche web via SearXNG : automatique quand nécessaire (ou forcée), requêtes anonymisées, sources citées, protection SSRF
 6. Bases documentaires (RAG)
 7. Authentification LDAP (AD AMG.lan) en complément des comptes locaux, HTTPS
 

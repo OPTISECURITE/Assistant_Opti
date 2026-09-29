@@ -21,30 +21,64 @@ from . import config, ollama
 log = logging.getLogger("opti.web")
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AssistantOpti/1.0)", "Accept-Language": "fr-FR,fr;q=0.9"}
 
-QUERY_PROMPT = (
-    "Tu génères une requête pour un moteur de recherche web public, à partir de la dernière question "
-    "de l'utilisateur (et du contexte de la conversation si nécessaire).\n"
-    "Règles : 3 à 8 mots-clés, en français sauf si le sujet est anglophone, sans guillemets. "
-    "N'inclus JAMAIS de nom de personne, de client, d'adresse, d'e-mail ni d'information interne à l'entreprise : "
-    "remplace-les par des termes génériques.\n"
-    "Réponds uniquement par la requête, sans aucun autre texte."
-)
+ROUTER_PROMPT = """Tu es le module de décision « recherche web » d'un assistant d'entreprise (sécurité, télésurveillance).
+Aujourd'hui : {today}. Tes connaissances peuvent être datées ou incomplètes.
+
+Décide si la DERNIÈRE question de l'utilisateur nécessite une recherche sur Internet.
+Recherche = OUI si la réponse dépend d'informations factuelles que tu ne connais pas avec certitude :
+actualité ou événements récents, réglementation / normes / lois (versions en vigueur), prix, produits ou
+modèles précis, entreprises, chiffres ou statistiques publics, dates, documentation technique d'un logiciel,
+ou si l'utilisateur demande explicitement de chercher / vérifier.
+Recherche = NON pour : rédiger, reformuler, corriger, traduire, résumer, conseiller de façon générale,
+calculer, analyser un document ou un fichier joint, questions internes à l'entreprise, conversation courante.
+{files_note}
+Si OUI, écris une requête de 3 à 8 mots-clés, ANONYMISÉE : aucun nom de personne, de client, de site,
+aucune adresse, e-mail, téléphone ni information interne. Remplace-les par des termes génériques.
+
+Réponds uniquement en JSON : {{"recherche": true|false, "requete": "..."}}"""
+
+_SCRUB = [
+    (re.compile(r"\S+@\S+"), " "),                                   # e-mails
+    (re.compile(r"(?:\+33|0)\s*[1-9](?:[\s.-]*\d{2}){4}"), " "),   # téléphones FR
+    (re.compile(r"https?://\S+|\b\S+\.(?:lan|local|internal)\b"), " "),  # adresses et domaines internes
+    (re.compile(r"\b\d{5,}\b"), " "),                                # identifiants numériques longs
+]
 
 
-# ── Requête ──────────────────────────────────────────────────────────────────
-async def make_query(history: list[dict]) -> str:
+def scrub(query: str) -> str:
+    """Filet de sécurité : retire ce qui ressemble à une donnée personnelle ou interne."""
+    for rx, rep in _SCRUB:
+        query = rx.sub(rep, query)
+    return " ".join(query.replace('"', " ").split())[:200]
+
+
+def _conversation(history: list[dict]) -> str:
     recent = [m for m in history if m["role"] in ("user", "assistant")][-4:]
-    convo = "\n".join(f"{'Utilisateur' if m['role'] == 'user' else 'Assistant'} : {m['content'][:800]}" for m in recent)
+    return "\n".join(f"{'Utilisateur' if m['role'] == 'user' else 'Assistant'} : {m['content'][:800]}" for m in recent)
+
+
+async def decide(history: list[dict], has_files: bool, forced: bool) -> str | None:
+    """Renvoie la requête (anonymisée) si une recherche est nécessaire, sinon None."""
+    import datetime, json
+    files_note = ("Des fichiers sont joints à la conversation : les questions qui portent sur leur contenu "
+                  "ne nécessitent PAS de recherche.") if has_files else ""
+    if forced:
+        files_note += "\nL'utilisateur a demandé une recherche : réponds forcément \"recherche\": true."
+    prompt = ROUTER_PROMPT.format(today=datetime.date.today().strftime("%d/%m/%Y"), files_note=files_note)
     try:
-        q = await ollama.complete([
-            {"role": "system", "content": QUERY_PROMPT},
-            {"role": "user", "content": convo},
-        ])
+        raw = await ollama.complete([{"role": "system", "content": prompt},
+                                     {"role": "user", "content": _conversation(history)}], json_mode=True)
+        data = json.loads(raw)
     except Exception:
-        log.exception("Génération de la requête impossible")
-        q = ""
-    q = " ".join(q.replace('"', " ").split())[:200]
-    return q or recent[-1]["content"][:200]
+        log.exception("Décision de recherche impossible")
+        data = {"recherche": forced, "requete": ""}
+    if not (forced or data.get("recherche")):
+        return None
+    query = scrub(str(data.get("requete") or ""))
+    if not query:
+        last = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
+        query = scrub(last)
+    return query or None
 
 
 # ── SearXNG ──────────────────────────────────────────────────────────────────
@@ -148,8 +182,7 @@ async def fetch_page(url: str) -> str:
     return ""
 
 
-async def search(history: list[dict]) -> tuple[str, list[dict]]:
-    query = await make_query(history)
+async def search(query: str) -> tuple[str, list[dict]]:
     try:
         results = await searxng(query)
     except Exception:

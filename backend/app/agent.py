@@ -70,13 +70,18 @@ def build_messages(chat: Chat, files: list[File]) -> list[dict]:
     return [{"role": "system", "content": system}, *history]
 
 
-async def run(chat: Chat, files: list[File], web_search: bool = False) -> AsyncIterator[str]:
+async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIterator[str]:
+    """web_mode : 'auto' (le modèle décide), 'on' (recherche forcée), 'off' (jamais)."""
     messages = build_messages(chat, files)
 
-    if web_search:
+    query = None
+    if web_mode != "off":
+        query = await web.decide(messages[1:], has_files=bool(files), forced=web_mode == "on")
+    if query:
         # Encart « recherche » affiché avant la réponse (une ligne JSON par état)
-        yield "```recherche\n" + json.dumps({"status": "searching"}) + "\n"
-        query, results = await web.search(messages[1:])
+        yield "```recherche\n" + json.dumps({"status": "searching", "query": query, "auto": web_mode == "auto"},
+                                             ensure_ascii=False) + "\n"
+        query, results = await web.search(query)
         shown = [{"title": r["title"], "url": r["url"]} for r in results]
         yield json.dumps({"status": "done", "query": query, "results": shown}, ensure_ascii=False) + "\n```\n\n"
         messages[0]["content"] += web.format_for_model(query, results)
