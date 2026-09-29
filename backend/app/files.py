@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import config, sandbox
+from . import config, sandbox, settings
 from .auth import CurrentUser, current_user
 from .db import get_db
 from .models import File, new_id, now_ms
@@ -77,14 +77,19 @@ def extract_text(path: Path, ext: str) -> str:
 # ── Routes ───────────────────────────────────────────────────────────────────
 @router.post("", status_code=201)
 async def upload(file: UploadFile, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    app = settings.app()
+    if not app.uploads_enabled:
+        raise HTTPException(403, "Les pièces jointes sont désactivées par l'administrateur.")
     filename = (file.filename or "fichier").strip()[:255]
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED:
         raise HTTPException(415, "Format non pris en charge. Formats acceptés : PDF, Word (.docx), texte, CSV, Excel (.xlsx).")
+    if ext in DATA_EXT and not app.analysis_enabled:
+        raise HTTPException(403, "L'analyse de fichiers de données est désactivée par l'administrateur.")
 
-    content = await file.read(config.MAX_UPLOAD_MB * 1024 * 1024 + 1)
-    if len(content) > config.MAX_UPLOAD_MB * 1024 * 1024:
-        raise HTTPException(413, f"Fichier trop volumineux (maximum {config.MAX_UPLOAD_MB} Mo).")
+    content = await file.read(app.max_upload_mb * 1024 * 1024 + 1)
+    if len(content) > app.max_upload_mb * 1024 * 1024:
+        raise HTTPException(413, f"Fichier trop volumineux (maximum {app.max_upload_mb} Mo).")
     if not content:
         raise HTTPException(400, "Le fichier est vide.")
 

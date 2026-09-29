@@ -22,6 +22,7 @@
     pending: [],        // pièces jointes en attente d'envoi : { id?, filename, kind, uploading }
     webForced: false,   // bouton globe : recherche forcée pour les prochains messages
     follow: true,       // suivre la réponse en bas de l'écran (désactivé si l'utilisateur remonte)
+    prefs: { tone: 'neutre', length: 'equilibree', instructions: '', text_size: 'normal', send_key: 'enter', web_mode: 'auto' },
   };
 
   // ── Utilitaires ───────────────────────────────────────────────────────────
@@ -161,6 +162,7 @@
   function modal(title, bodyHtml) {
     closeMenu();
     lastFocus = document.activeElement;
+    $('.op-modal').classList.remove('is-wide');
     $('#op-modal-title').textContent = title;
     $('.op-modal-body').innerHTML = bodyHtml;
     $('.op-modal-backdrop').hidden = false;
@@ -464,7 +466,7 @@
   }
 
   // ── Recherche web : automatique par défaut, forçable avec le globe ─────────
-  const getWebMode = () => { try { return localStorage.getItem('op-web-mode') || 'auto'; } catch { return 'auto'; } };
+  const getWebMode = () => state.prefs.web_mode || 'auto';
   const webModeFor = () => (state.webForced ? 'on' : getWebMode());
   function setWebForced(on) {
     state.webForced = on;
@@ -613,7 +615,7 @@
            <small style="display:block">PDF, Word, texte, CSV ou Excel. Les données sont analysées sur le fichier complet.</small></span><i data-lucide="chevron-right"></i></button>`);
       const sel = $('#op-web-mode');
       sel.value = getWebMode();
-      sel.addEventListener('change', () => { try { localStorage.setItem('op-web-mode', sel.value); } catch {} });
+      sel.addEventListener('change', () => savePrefs({ web_mode: sel.value }));
     },
     'analysis-info': () => toast('L’analyse de données s’active automatiquement quand vous joignez un fichier CSV ou Excel.'),
     regenerate,
@@ -742,7 +744,9 @@
       send(text);
     });
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+      if (e.key !== 'Enter' || e.isComposing) return;
+      const ctrlMode = state.prefs.send_key === 'ctrl-enter';
+      if (ctrlMode ? (e.ctrlKey || e.metaKey) : !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
     });
     input.addEventListener('input', () => {
       input.style.height = 'auto';
@@ -832,6 +836,36 @@
     }
   });
 
+  // ── Préférences et options activées par l'administrateur ──────────────────
+  function applyPrefs() {
+    root.dataset.textSize = state.prefs.text_size;
+    const ctrl = state.prefs.send_key === 'ctrl-enter';
+    $('#op-chat-question').placeholder = ctrl ? 'Poursuivez la conversation… (Ctrl + Entrée pour envoyer)' : 'Poursuivez la conversation…';
+    $('#op-question').placeholder = ctrl ? 'Comment puis-je vous aider aujourd’hui ? (Ctrl + Entrée pour envoyer)' : 'Comment puis-je vous aider aujourd’hui ?';
+  }
+
+  function applyFeatures() {
+    const c = state.config;
+    $$('[data-action="toggle-web"]').forEach((b) => (b.hidden = c.web_enabled === false));
+    $$('[data-action="attach"]').forEach((b) => (b.hidden = c.uploads_enabled === false));
+    $$('[data-action="analysis-info"]').forEach((b) => (b.hidden = c.analysis_enabled === false || c.uploads_enabled === false));
+    $('#op-file-input').accept = c.analysis_enabled === false ? '.pdf,.docx,.txt,.md' : '.pdf,.docx,.txt,.md,.csv,.xlsx,.xlsm';
+    $$('[data-admin-only]').forEach((el) => (el.hidden = !state.me.is_admin));
+  }
+
+  let prefsTimer = null;
+  function savePrefs(changes, { silent = false } = {}) {
+    Object.assign(state.prefs, changes);
+    applyPrefs();
+    clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(async () => {
+      try {
+        state.prefs = await api('/api/me/settings', { method: 'PUT', body: JSON.stringify(state.prefs) });
+        if (!silent) toast('Réglages enregistrés.');
+      } catch { toast('Les réglages n’ont pas pu être enregistrés.'); }
+    }, 400);
+  }
+
   // ── Démarrage ─────────────────────────────────────────────────────────────
   function applyIdentity() {
     const name = state.me.display_name || state.me.username || '';
@@ -843,9 +877,19 @@
     $$('[data-initials]').forEach((el) => (el.textContent = initials));
   }
 
+  async function reloadConfig() {
+    try { state.config = await api('/api/config'); } catch { return; }
+    $$('.op-model').forEach((b) => (b.innerHTML = `<span class="op-model-dot"></span> ${esc(state.config.model_label)} <i data-lucide="chevron-down"></i>`));
+    applyFeatures();
+    icons();
+  }
+
   async function startApp() {
     try { state.me = await api('/api/me'); } catch { return; }   // 401 → écran de connexion
     try { state.config = await api('/api/config'); } catch {}
+    try { state.prefs = await api('/api/me/settings'); } catch {}
+    applyPrefs();
+    applyFeatures();
     $$('.op-model').forEach((b) => (b.innerHTML = `<span class="op-model-dot"></span> ${esc(state.config.model_label)} <i data-lucide="chevron-down"></i>`));
     applyIdentity();
     $('.op-login').hidden = true;
@@ -854,6 +898,10 @@
     await route();
     icons();
   }
+
+  // Briques partagées avec settings.js (réglages et administration)
+  window.Opti = { state, api, modal, closeModal, toast, icons, esc, actions, applyTheme, getTheme, savePrefs,
+                  refreshChats, showHome, startApp, reloadConfig, $, $$ };
 
   applyTheme();
   icons();

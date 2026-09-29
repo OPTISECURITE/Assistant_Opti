@@ -13,7 +13,7 @@ import logging
 import re
 from typing import AsyncIterator
 
-from . import config, ollama, sandbox, web
+from . import config, ollama, sandbox, settings, web
 from .files import file_path
 from .models import Chat, File
 
@@ -34,11 +34,12 @@ Tu ne vois qu'un aperçu : pour tout chiffre, comptage, statistique, filtre ou e
 """
 
 
-def build_messages(chat: Chat, files: list[File]) -> list[dict]:
+def build_messages(chat: Chat, files: list[File], prefs: settings.UserPrefs | None = None) -> list[dict]:
+    app = settings.app()
     docs = [f for f in files if f.kind == "document"]
-    data = [f for f in files if f.kind == "data"]
+    data = [f for f in files if f.kind == "data"] if app.analysis_enabled else []
 
-    system = config.SYSTEM_PROMPT
+    system = app.system_prompt + (settings.prefs_prompt(prefs) if prefs else "")
     if docs:
         system += "\n\n## Documents joints par l'utilisateur\n"
         budget = config.DOC_CHAR_BUDGET
@@ -72,7 +73,12 @@ def build_messages(chat: Chat, files: list[File]) -> list[dict]:
 
 async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIterator[str]:
     """web_mode : 'auto' (le modèle décide), 'on' (recherche forcée), 'off' (jamais)."""
-    messages = build_messages(chat, files)
+    app = settings.app()
+    messages = build_messages(chat, files, settings.user_prefs(chat.owner_id))
+    if not app.web_enabled:
+        web_mode = "off"
+    if not app.analysis_enabled:
+        files = [f for f in files if f.kind != "data"]
 
     query = None
     if web_mode != "off":
@@ -95,7 +101,7 @@ async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIte
         code = None
         try:
             async for token in tokens:
-                if data_files and steps < config.MAX_ANALYSIS_STEPS:
+                if data_files and steps < app.max_analysis_steps:
                     m = CODE_BLOCK.search(step_text + token)
                     if m:
                         # le bloc est complet : on n'affiche rien au-delà et on coupe le modèle
@@ -114,7 +120,7 @@ async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIte
 
         steps += 1
         ok, output = await sandbox.run_code(code, data_files)
-        log.info("Analyse %d/%d : %s", steps, config.MAX_ANALYSIS_STEPS, "ok" if ok else "erreur")
+        log.info("Analyse %d/%d : %s", steps, app.max_analysis_steps, "ok" if ok else "erreur")
         yield f"\n\n```resultat\n{output}\n```\n\n"
 
         messages.append({"role": "assistant", "content": step_text})
@@ -124,6 +130,6 @@ async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIte
                       "(ou écris un autre bloc de code si un calcul manque).")
         else:
             follow = ("L'exécution a échoué :\n```\n" + output + "\n```\n"
-                      + ("Corrige le code et réessaie." if steps < config.MAX_ANALYSIS_STEPS
+                      + ("Corrige le code et réessaie." if steps < app.max_analysis_steps
                          else "Nombre d'essais atteint : explique le problème à l'utilisateur sans inventer de résultat."))
         messages.append({"role": "user", "content": follow})

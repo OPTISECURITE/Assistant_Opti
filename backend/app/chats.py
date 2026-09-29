@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from . import agent, config
+from . import agent, config, settings
 from .auth import CurrentUser, current_user
 from .db import SessionLocal, get_db
 from .files import delete_files_of_chat, file_summary
@@ -125,7 +125,7 @@ async def stream_and_store(chat_id: str, web_mode: str = "auto") -> AsyncIterato
         chat = db.get(Chat, chat_id)
         files = db.scalars(select(File).where(File.chat_id == chat_id).order_by(File.created_at)).all()
         answer = Message(chat_id=chat_id, position=len(chat.messages), role="assistant",
-                         content="", model=config.MODEL, done=False)
+                         content="", model=settings.app().model, done=False)
         db.add(answer)
         db.commit()
 

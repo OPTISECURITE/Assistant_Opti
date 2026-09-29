@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from . import config, ollama
+from . import config, ollama, settings
 
 log = logging.getLogger("opti.web")
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AssistantOpti/1.0)", "Accept-Language": "fr-FR,fr;q=0.9"}
@@ -85,7 +85,7 @@ async def decide(history: list[dict], has_files: bool, forced: bool) -> str | No
 async def searxng(query: str) -> list[dict]:
     params = {"q": query, "format": "json", "language": "fr", "safesearch": 1, "pageno": 1}
     async with httpx.AsyncClient(timeout=15, headers=HEADERS) as client:
-        r = await client.get(f"{config.SEARXNG_URL}/search", params=params)
+        r = await client.get(f"{settings.app().searxng_url.rstrip('/')}/search", params=params)
         r.raise_for_status()
         data = r.json()
     results, seen = [], set()
@@ -96,7 +96,7 @@ async def searxng(query: str) -> list[dict]:
         seen.add(url)
         results.append({"title": (item.get("title") or url)[:200], "url": url,
                         "snippet": (item.get("content") or "")[:500]})
-        if len(results) >= config.WEB_RESULTS:
+        if len(results) >= settings.app().web_results:
             break
     return results
 
@@ -196,7 +196,7 @@ async def search(query: str) -> tuple[str, list[dict]]:
             text = ""
         r["content"] = text[:config.WEB_PAGE_CHARS]
 
-    await asyncio.gather(*(read(r) for r in results[:config.WEB_PAGES_READ]))
+    await asyncio.gather(*(read(r) for r in results[:settings.app().web_pages_read]))
     return query, results
 
 

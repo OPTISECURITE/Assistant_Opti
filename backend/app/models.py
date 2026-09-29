@@ -95,3 +95,19 @@ class File(Base):
     size: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text, default="")     # texte extrait ou profil des données
     created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+
+
+class UserSettings(Base):
+    """Préférences d'un utilisateur (JSON validé par settings.UserPrefs)."""
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("user.id", ondelete="CASCADE"), primary_key=True)
+    data: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class AppSetting(Base):
+    """Réglages globaux modifiables depuis l'administration (JSON validé par settings.AppSettings)."""
+    __tablename__ = "app_setting"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="{}")

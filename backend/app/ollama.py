@@ -9,7 +9,7 @@ from typing import AsyncIterator
 
 import httpx
 
-from . import config
+from . import config, settings
 
 log = logging.getLogger("opti.ollama")
 
@@ -18,10 +18,12 @@ TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
 
 
 async def stream_chat(messages: list[dict]) -> AsyncIterator[str]:
+    s = settings.app()
     payload = {
-        "model": config.MODEL,
+        "model": s.model,
         "messages": messages,   # consigne système incluse par agent.build_messages
         "stream": True,
+        "options": {"temperature": s.temperature},
     }
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -61,7 +63,7 @@ def _error_message(raw: str) -> str:
 
 async def complete(messages: list[dict], json_mode: bool = False) -> str:
     """Appel court, non diffusé (décision de recherche web)."""
-    payload = {"model": config.MODEL, "messages": messages, "stream": False,
+    payload = {"model": settings.app().model, "messages": messages, "stream": False,
                "options": {"temperature": 0.1, "num_predict": 80}}
     if json_mode:
         payload["format"] = "json"

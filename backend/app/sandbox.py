@@ -17,7 +17,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from . import config
+from . import config, settings
 
 log = logging.getLogger("opti.sandbox")
 OUTPUT_LIMIT = 12_000   # caractères de sortie renvoyés au modèle
@@ -39,10 +39,10 @@ async def run_code(code: str, files: list[tuple[Path, str]]) -> tuple[bool, str]
 
 async def _communicate(proc, code: str, on_timeout) -> tuple[bool, str]:
     try:
-        out, _ = await asyncio.wait_for(proc.communicate(code.encode()), timeout=config.SANDBOX_TIMEOUT + 5)
+        out, _ = await asyncio.wait_for(proc.communicate(code.encode()), timeout=settings.app().sandbox_timeout + 5)
     except asyncio.TimeoutError:
         await on_timeout()
-        return False, f"Erreur : l'exécution a dépassé {config.SANDBOX_TIMEOUT} secondes et a été arrêtée."
+        return False, f"Erreur : l'exécution a dépassé {settings.app().sandbox_timeout} secondes et a été arrêtée."
     text = out.decode(errors="replace").strip() or "(aucune sortie : utilise print() pour afficher les résultats)"
     return proc.returncode == 0, _truncate(text)
 
@@ -60,7 +60,7 @@ async def _run_docker(code: str, files: list[tuple[Path, str]]) -> tuple[bool, s
     ]
     for host_path, inner in files:
         cmd += ["-v", f"{host_path}:/data/{inner}:ro"]
-    cmd += [config.SANDBOX_IMAGE, "timeout", "-s", "KILL", str(config.SANDBOX_TIMEOUT), "python", "-I", "-"]
+    cmd += [config.SANDBOX_IMAGE, "timeout", "-s", "KILL", str(settings.app().sandbox_timeout), "python", "-I", "-"]
 
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
@@ -91,7 +91,7 @@ async def _run_subprocess(code: str, files: list[tuple[Path, str]]) -> tuple[boo
     def limits():
         mem = 2 * 1024 ** 3
         resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
-        resource.setrlimit(resource.RLIMIT_CPU, (config.SANDBOX_TIMEOUT, config.SANDBOX_TIMEOUT))
+        resource.setrlimit(resource.RLIMIT_CPU, (settings.app().sandbox_timeout, settings.app().sandbox_timeout))
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-I", "-", cwd=workdir, env={"PATH": "/usr/bin:/bin"}, preexec_fn=limits,

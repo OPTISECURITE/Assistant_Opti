@@ -23,6 +23,9 @@ navigateur ──HTTP──> backend FastAPI (port 8100) ──> Ollama (127.0.0
 - `backend/app/sandbox.py`: exécution isolée du code d'analyse (conteneur Docker jetable)
 - `deploy/sandbox/`       : image Docker du bac à sable
 - `backend/app/web.py`    : recherche web (SearXNG), lecture des pages, protection SSRF
+- `backend/app/settings.py` : réglages globaux (administration) et préférences utilisateur
+- `backend/app/admin.py` / `me.py` : API d'administration et de l'espace personnel
+- `frontend/js/settings.js` : fenêtres Réglages et Administration
 - `frontend/` : interface issue de la maquette Opti (`css/opti.css` = CSS de la maquette, `css/app.css` = compléments)
 
 ## Installation
@@ -46,8 +49,9 @@ Interface : `http://<serveur>:8100`
 3. ✅ Connexion par comptes locaux, « Bonjour [prénom] », menu profil
 4. ✅ Pièces jointes : documents (PDF, Word, texte) et analyse de données (CSV, Excel) sur le fichier complet
 5. ✅ Recherche web via SearXNG : automatique quand nécessaire (ou forcée), requêtes anonymisées, sources citées, protection SSRF
-6. Bases documentaires (RAG)
-7. Authentification LDAP (AD AMG.lan) en complément des comptes locaux, HTTPS
+6. ✅ Réglages utilisateur (ton, longueur, instructions, texte, envoi, export) et Administration (comptes, modèle, consigne, options, statistiques)
+7. Bases documentaires (RAG)
+8. Authentification LDAP (AD AMG.lan) en complément des comptes locaux, HTTPS
 
 ## Sauvegarde
 

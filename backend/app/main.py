@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth_routes, chats, config, files
+from . import admin, auth_routes, chats, config, files, me, settings
 from .auth import current_user
 from .db import SessionLocal, init_db
 
@@ -33,6 +33,8 @@ app = FastAPI(title="Assistant Opti", docs_url=None, redoc_url=None, lifespan=li
 app.include_router(auth_routes.router)
 app.include_router(chats.router)
 app.include_router(files.router)
+app.include_router(me.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/health")
@@ -42,7 +44,10 @@ async def health():
 
 @app.get("/api/config", dependencies=[Depends(current_user)])
 async def get_config():
-    return {"model": config.MODEL, "model_label": config.MODEL_LABEL}
+    s = settings.app()
+    return {"model": s.model, "model_label": s.model_label, "web_enabled": s.web_enabled,
+            "uploads_enabled": s.uploads_enabled, "analysis_enabled": s.analysis_enabled,
+            "max_upload_mb": s.max_upload_mb}
 
 
 # ── Front ────────────────────────────────────────────────────────────────────
