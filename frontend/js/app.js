@@ -19,6 +19,7 @@
     controller: null,   // génération en cours
     menuChat: null,     // conversation visée par le menu « … »
     menuAnchor: null,
+    pending: [],        // pièces jointes en attente d'envoi : { id?, filename, kind, uploading }
   };
 
   // ── Utilitaires ───────────────────────────────────────────────────────────
@@ -26,6 +27,30 @@
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   marked.setOptions({ gfm: true, breaks: true });
   const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text || ''));
+
+  // Affiche une réponse : Markdown + regroupement « code exécuté / résultat » dans un encart repliable
+  function renderAnswer(el, text) {
+    el.innerHTML = renderMarkdown(text);
+    el.querySelectorAll('pre > code.language-python').forEach((code) => {
+      const pre = code.parentElement;
+      const next = pre.nextElementSibling;
+      const result = next?.matches('pre') && next.querySelector('code.language-resultat') ? next : null;
+      const out = result?.innerText || '';
+      const failed = /^(Traceback|Erreur)/.test(out.trim());
+      const box = document.createElement('details');
+      box.className = 'op-analysis' + (!result ? ' is-running' : failed ? ' is-error' : '');
+      const label = !result ? 'Analyse en cours…' : failed ? 'Analyse · erreur, nouvelle tentative' : 'Analyse des données · calcul sur le fichier complet';
+      box.innerHTML = `<summary><i data-lucide="${!result ? 'loader-circle' : failed ? 'circle-alert' : 'chart-column'}"></i><span>${label}</span><i class="op-chevron" data-lucide="chevron-right"></i></summary><div class="op-analysis-label">CODE EXÉCUTÉ</div>`;
+      pre.replaceWith(box);
+      box.appendChild(pre);
+      if (result) {
+        const lab = document.createElement('div');
+        lab.className = 'op-analysis-label';
+        lab.textContent = 'RÉSULTAT';
+        box.append(lab, result);
+      }
+    });
+  }
 
   async function api(path, options = {}) {
     const resp = await fetch(path, {
@@ -151,7 +176,7 @@
           <button type="button" class="op-icon" aria-label="Régénérer la réponse" data-action="regenerate"><i data-lucide="refresh-cw"></i></button>
         </div>
       </div>`;
-    wrap.querySelector('.op-answer-content').innerHTML = renderMarkdown(content);
+    renderAnswer(wrap.querySelector('.op-answer-content'), content);
     return wrap;
   }
 
@@ -163,6 +188,7 @@
       if (m.role === 'user') {
         exchange = document.createElement('div');
         exchange.className = 'op-chat-exchange';
+        if (m.files?.length) exchange.appendChild(chipList(m.files, { removable: false, cls: 'op-message-files' }));
         const bubble = document.createElement('div');
         bubble.className = 'op-user-message';
         bubble.textContent = m.content;
@@ -274,7 +300,11 @@
 
   async function send(text) {
     text = (text || '').trim();
-    if (!text || state.controller) return;
+    if (state.controller) return;
+    if (state.pending.some((f) => f.uploading)) return toast('Patientez, un fichier est en cours d’envoi.');
+    const files = state.pending.filter((f) => f.id);
+    if (!text && files.length) text = files.some((f) => f.kind === 'data') ? 'Analyse ce fichier et donne-moi les principaux chiffres.' : 'Résume ce document.';
+    if (!text) return;
     try {
       if (!state.active) {
         const chat = await api('/api/chats', { method: 'POST' });
@@ -284,9 +314,11 @@
     } catch {
       return toast('Impossible de créer la conversation.');
     }
-    state.active.messages.push({ role: 'user', content: text, done: true });
+    state.pending = [];
+    renderPending();
+    state.active.messages.push({ role: 'user', content: text, done: true, files });
     showConversation();
-    await generate(`/api/chats/${state.active.id}/messages`, { content: text });
+    await generate(`/api/chats/${state.active.id}/messages`, { content: text, file_ids: files.map((f) => f.id) });
   }
 
   async function regenerate() {
@@ -311,7 +343,7 @@
     setBusy(true);
 
     let full = '', pending = false, failed = false;
-    const paint = () => { pending = false; contentEl.innerHTML = renderMarkdown(full); scrollToBottom(); };
+    const paint = () => { pending = false; renderAnswer(contentEl, full); icons(); scrollToBottom(); };
 
     try {
       const resp = await fetch(url, {
@@ -357,6 +389,82 @@
     refreshChats();
   }
 
+  // ── Pièces jointes ────────────────────────────────────────────────────────
+  const fileIcon = (f) => (f.uploading ? 'loader-circle' : f.kind === 'data' ? 'sheet' : 'file-text');
+  const fmtSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} Mo` : `${Math.max(1, Math.round(n / 1024))} Ko`);
+
+  function chipList(files, { removable, cls = 'op-attachments' }) {
+    const box = document.createElement('div');
+    box.className = cls;
+    files.forEach((f, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'op-chip' + (f.uploading ? ' is-uploading' : '');
+      chip.innerHTML = `<i data-lucide="${fileIcon(f)}"></i><span></span>${f.size ? `<small>${fmtSize(f.size)}</small>` : ''}` +
+        (removable && !f.uploading ? `<button type="button" aria-label="Retirer le fichier" data-remove="${i}"><i data-lucide="x"></i></button>` : '');
+      chip.querySelector('span').textContent = f.filename;
+      chip.title = f.filename;
+      box.appendChild(chip);
+    });
+    return box;
+  }
+
+  function renderPending() {
+    $$('.op-composer .op-attachments').forEach((zone) => {
+      zone.replaceChildren(...(state.pending.length ? chipList(state.pending, { removable: true }).childNodes : []));
+      zone.hidden = !state.pending.length;
+    });
+    icons();
+  }
+
+  async function uploadFiles(fileList) {
+    for (const file of fileList) {
+      if (state.pending.length >= 10) { toast('10 fichiers maximum par message.'); break; }
+      const entry = { filename: file.name, size: file.size, kind: /\.(csv|xlsx|xlsm)$/i.test(file.name) ? 'data' : 'document', uploading: true };
+      state.pending.push(entry);
+      renderPending();
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const resp = await fetch('/api/files', { method: 'POST', body: form });
+        if (resp.status === 401) { showLogin(); return; }
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.detail || 'Envoi impossible.');
+        Object.assign(entry, data, { uploading: false });
+      } catch (e) {
+        state.pending.splice(state.pending.indexOf(entry), 1);
+        toast(`${file.name} : ${e.message}`);
+      }
+      renderPending();
+    }
+  }
+
+  async function removePending(index) {
+    const [f] = state.pending.splice(index, 1);
+    renderPending();
+    if (f?.id) fetch(`/api/files/${f.id}`, { method: 'DELETE' }).catch(() => {});
+  }
+
+  $('#op-file-input').addEventListener('change', (e) => {
+    uploadFiles([...e.target.files]);
+    e.target.value = '';
+  });
+
+  $$('.op-composer').forEach((composer) => {
+    composer.addEventListener('dragover', (e) => {
+      if (![...e.dataTransfer.types].includes('Files')) return;
+      e.preventDefault();
+      composer.classList.add('is-dragover');
+    });
+    composer.addEventListener('dragleave', (e) => {
+      if (!composer.contains(e.relatedTarget)) composer.classList.remove('is-dragover');
+    });
+    composer.addEventListener('drop', (e) => {
+      e.preventDefault();
+      composer.classList.remove('is-dragover');
+      if (e.dataTransfer.files.length) uploadFiles([...e.dataTransfer.files]);
+    });
+  });
+
   // ── Téléchargement d'une conversation (Markdown) ──────────────────────────
   async function download(chatSummary) {
     const chat = state.active?.id === chatSummary.id ? state.active : await api(`/api/chats/${chatSummary.id}`);
@@ -398,6 +506,8 @@
     'close-modal': closeModal,
     soon: () => toast('Fonctionnalité prévue dans une prochaine étape.'),
     'thread-menu': openMenu,
+    attach: () => $('#op-file-input').click(),
+    'analysis-info': () => toast('L’analyse de données s’active automatiquement quand vous joignez un fichier CSV ou Excel.'),
     regenerate,
 
     'copy-answer': async (btn) => {
@@ -508,6 +618,7 @@
     if (!e.target.closest('.op-profile-anchor')) toggleProfile(false);
     const b = e.target.closest('button');
     if (!b) return;
+    if (b.dataset.remove !== undefined) { removePending(Number(b.dataset.remove)); return; }
     if (b.dataset.prompt) { $('#op-question').value = b.dataset.prompt; $('#op-question').focus(); return; }
     if (b.dataset.action && actions[b.dataset.action]) actions[b.dataset.action](b);
   });
@@ -561,6 +672,8 @@
     state.controller?.abort();
     state.chats = [];
     state.active = null;
+    state.pending = [];
+    renderPending();
     closeModal();
     closeMenu();
     $('.op-app').hidden = true;

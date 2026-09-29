@@ -9,8 +9,12 @@ Usage (depuis /opt/assistant-opti) :
     venv/bin/python backend/manage.py disable-user j.dupont      (et enable-user)
     venv/bin/python backend/manage.py delete-user j.dupont       (supprime aussi ses conversations)
     venv/bin/python backend/manage.py claim-chats m.chaput       (récupère les conversations de l'étape 2)
+    venv/bin/python backend/manage.py test-sandbox               (vérifie le bac à sable d'analyse)
 """
 import argparse
+import asyncio
+import tempfile
+from pathlib import Path
 import getpass
 import sys
 from datetime import datetime
@@ -48,9 +52,13 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("create-user"); c.add_argument("username"); c.add_argument("display_name"); c.add_argument("--admin", action="store_true")
     sub.add_parser("list-users")
+    sub.add_parser("test-sandbox")
     for name in ("set-password", "disable-user", "enable-user", "delete-user", "claim-chats"):
         sub.add_parser(name).add_argument("username")
     args = p.parse_args()
+
+    if args.cmd == "test-sandbox":
+        return test_sandbox()
 
     init_db()
     with SessionLocal() as db:
@@ -101,6 +109,34 @@ def main():
             n = db.execute(update(Chat).where(Chat.owner_id == "local").values(owner_id=user.id)).rowcount
             db.commit()
             print(f"[✓] {n} conversation(s) rattachée(s) à {user.username}.")
+
+
+def test_sandbox():
+    """Vérifie que le bac à sable calcule correctement ET qu'il est bien isolé."""
+    from app import config, sandbox
+    print(f"Mode : {config.SANDBOX_MODE} · image : {config.SANDBOX_IMAGE}")
+    with tempfile.TemporaryDirectory() as tmp:
+        csv = Path(tmp) / "test.csv"
+        csv.write_text("site,alarmes\nLimoges,3\nBrive,5\nTulle,2\n", encoding="utf-8")
+        csv.chmod(0o644)
+        Path(tmp).chmod(0o755)
+        tests = [
+            ("Calcul pandas sur le fichier", "import pandas as pd\nprint(pd.read_csv('/data/test.csv')['alarmes'].sum())", True, "10"),
+            ("Réseau coupé", "import socket\nsocket.create_connection(('1.1.1.1', 53), timeout=3)\nprint('RESEAU OUVERT')", False, None),
+            ("Fichier en lecture seule", "open('/data/test.csv', 'a').write('x')\nprint('ECRITURE POSSIBLE')", False, None),
+            ("Pas de privilèges root", "import os\nprint('uid', os.getuid())", True, "uid 10001"),
+            ("Pas d'accès aux données de l'application", "import os\nprint(os.path.exists('/opt/assistant-opti'))", True, "False"),
+        ]
+        failures = 0
+        for label, code, want_ok, expect in tests:
+            ok, out = asyncio.run(sandbox.run_code(code, [(csv, "test.csv")]))
+            good = (ok == want_ok) and (expect is None or expect in out) and "OUVERT" not in out and "POSSIBLE" not in out
+            failures += not good
+            print(f"  [{'✓' if good else '✗'}] {label}" + ("" if good else f"\n      → {out[-300:]}"))
+    if config.SANDBOX_MODE != "docker":
+        print("  [!] Mode subprocess : AUCUNE isolation réelle. Ne pas utiliser en production.")
+    print("Bac à sable OK." if not failures else f"{failures} test(s) en échec.")
+    sys.exit(1 if failures else 0)
 
 
 if __name__ == "__main__":

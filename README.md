@@ -18,6 +18,10 @@ navigateur ──HTTP──> backend FastAPI (port 8100) ──> Ollama (127.0.0
 - `backend/app/auth.py`   : comptes (Argon2id), sessions par cookie HttpOnly, anti-force brute
 - `backend/app/auth_routes.py` : connexion / déconnexion / identité
 - `backend/manage.py`     : administration des comptes en ligne de commande
+- `backend/app/files.py`  : fichiers joints (extraction PDF/Word/texte, profil CSV/Excel)
+- `backend/app/agent.py`  : contexte envoyé au modèle et boucle d'analyse de données
+- `backend/app/sandbox.py`: exécution isolée du code d'analyse (conteneur Docker jetable)
+- `deploy/sandbox/`       : image Docker du bac à sable
 - `frontend/` : interface issue de la maquette Opti (`css/opti.css` = CSS de la maquette, `css/app.css` = compléments)
 
 ## Installation
@@ -40,7 +44,9 @@ Interface : `http://<serveur>:8100`
 2. ✅ Persistance des conversations (renommer, épingler, télécharger, supprimer, recherche)
 3. ✅ Connexion par comptes locaux, « Bonjour [prénom] », menu profil
 5. Authentification LDAP (AD AMG.lan) en complément des comptes locaux, HTTPS
-4. Documents (RAG) et analyse de fichiers côté serveur
+4. ✅ Pièces jointes : documents (PDF, Word, texte) et analyse de données (CSV, Excel) sur le fichier complet
+6. Recherche web (SearXNG)
+7. Bases documentaires (RAG)
 
 ## Sauvegarde
 
@@ -55,4 +61,15 @@ venv/bin/python backend/manage.py create-user m.chaput "Maxime Chaput" --admin
 venv/bin/python backend/manage.py list-users
 venv/bin/python backend/manage.py set-password m.chaput
 venv/bin/python backend/manage.py disable-user j.dupont
+```
+
+## Bac à sable d'analyse de données
+
+Le code Python écrit par le modèle pour analyser un CSV/Excel s'exécute dans un conteneur jetable :
+sans réseau, système de fichiers en lecture seule, utilisateur non privilégié, 2 Go de RAM, 2 CPU,
+64 processus, 60 secondes maximum, fichiers de la conversation montés en lecture seule dans `/data`.
+
+```bash
+docker build -t opti-sandbox:1 deploy/sandbox
+venv/bin/python backend/manage.py test-sandbox     # les 5 contrôles doivent être ✓
 ```

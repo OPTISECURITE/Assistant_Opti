@@ -76,3 +76,22 @@ class Session(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("user.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
     expires_at: Mapped[int] = mapped_column(BigInteger, index=True)
+
+
+class File(Base):
+    """
+    Fichier joint. kind = 'document' (texte extrait et donné au modèle)
+    ou 'data' (CSV/Excel analysé par du code exécuté dans le bac à sable).
+    """
+    __tablename__ = "file"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    owner_id: Mapped[str] = mapped_column(String(255), index=True)
+    chat_id: Mapped[str | None] = mapped_column(ForeignKey("chat.id", ondelete="CASCADE"), nullable=True, index=True)
+    message_id: Mapped[str | None] = mapped_column(ForeignKey("message.id", ondelete="SET NULL"), nullable=True, index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    stored_name: Mapped[str] = mapped_column(String(255))   # nom sûr, utilisé dans le bac à sable
+    kind: Mapped[str] = mapped_column(String(16))
+    size: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text, default="")     # texte extrait ou profil des données
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)

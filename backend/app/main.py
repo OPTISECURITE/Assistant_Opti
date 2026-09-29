@@ -11,9 +11,9 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth_routes, chats, config
+from . import auth_routes, chats, config, files
 from .auth import current_user
-from .db import init_db
+from .db import SessionLocal, init_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
 
@@ -21,12 +21,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    config.FILES_DIR.mkdir(parents=True, exist_ok=True)
+    with SessionLocal() as db:
+        n = files.purge_orphans(db)
+        if n:
+            logging.getLogger("opti").info("%d fichier(s) orphelin(s) supprimé(s)", n)
     yield
 
 
 app = FastAPI(title="Assistant Opti", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.include_router(auth_routes.router)
 app.include_router(chats.router)
+app.include_router(files.router)
 
 
 @app.get("/api/health")

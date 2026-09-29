@@ -11,10 +11,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from . import config, ollama
+from . import agent, config
 from .auth import CurrentUser, current_user
 from .db import SessionLocal, get_db
-from .models import Chat, Message, now_ms
+from .files import delete_files_of_chat, file_summary
+from .models import Chat, File, Message, now_ms
 
 log = logging.getLogger("opti.chats")
 router = APIRouter(prefix="/api/chats", tags=["chats"])
@@ -30,6 +31,7 @@ class ChatUpdate(BaseModel):
 
 class NewMessage(BaseModel):
     content: str = Field(min_length=1, max_length=100_000)
+    file_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
 def chat_summary(c: Chat) -> dict:
@@ -37,9 +39,13 @@ def chat_summary(c: Chat) -> dict:
             "created_at": c.created_at, "updated_at": c.updated_at}
 
 
-def chat_full(c: Chat) -> dict:
+def chat_full(c: Chat, db: Session) -> dict:
+    by_message: dict[str, list] = {}
+    for f in db.scalars(select(File).where(File.chat_id == c.id).order_by(File.created_at)):
+        by_message.setdefault(f.message_id, []).append(file_summary(f))
     return {**chat_summary(c), "messages": [
-        {"id": m.id, "role": m.role, "content": m.content, "done": m.done, "model": m.model}
+        {"id": m.id, "role": m.role, "content": m.content, "done": m.done, "model": m.model,
+         "files": by_message.get(m.id, [])}
         for m in c.messages
     ]}
 
@@ -79,7 +85,7 @@ def create_chat(user: CurrentUser = Depends(current_user), db: Session = Depends
 
 @router.get("/{chat_id}")
 def read_chat(chat_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    return chat_full(get_owned_chat(db, chat_id, user))
+    return chat_full(get_owned_chat(db, chat_id, user), db)
 
 
 @router.patch("/{chat_id}")
@@ -96,7 +102,9 @@ def update_chat(chat_id: str, body: ChatUpdate,
 
 @router.delete("/{chat_id}", status_code=204)
 def delete_chat(chat_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    db.delete(get_owned_chat(db, chat_id, user))
+    chat = get_owned_chat(db, chat_id, user)
+    delete_files_of_chat(db, chat.id)
+    db.delete(chat)
     db.commit()
 
 
@@ -110,7 +118,7 @@ async def stream_and_store(chat_id: str) -> AsyncIterator[str]:
     db = SessionLocal()
     try:
         chat = db.get(Chat, chat_id)
-        history = [{"role": m.role, "content": m.content} for m in chat.messages if m.content]
+        files = db.scalars(select(File).where(File.chat_id == chat_id).order_by(File.created_at)).all()
         answer = Message(chat_id=chat_id, position=len(chat.messages), role="assistant",
                          content="", model=config.MODEL, done=False)
         db.add(answer)
@@ -118,14 +126,14 @@ async def stream_and_store(chat_id: str) -> AsyncIterator[str]:
 
         parts: list[str] = []
         completed = False
-        tokens = ollama.stream_chat(history)
+        tokens = agent.run(chat, files)
         try:
             async for token in tokens:
                 parts.append(token)
                 yield token
             completed = True
         finally:
-            await tokens.aclose()   # coupe la requête Ollama : le GPU arrête de générer
+            await tokens.aclose()   # coupe la requête Ollama et l'analyse en cours
             answer.content = "".join(parts)
             answer.done = completed
             chat.updated_at = now_ms()
@@ -148,9 +156,19 @@ def streaming(chat_id: str) -> StreamingResponse:
 def send_message(chat_id: str, body: NewMessage,
                  user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     chat = get_owned_chat(db, chat_id, user)
+    files = []
+    for fid in dict.fromkeys(body.file_ids):
+        f = db.get(File, fid)
+        if not f or f.owner_id != user.id or f.message_id:
+            raise HTTPException(status_code=400, detail="Fichier joint invalide.")
+        files.append(f)
     if not chat.messages:
         chat.title = make_title(body.content)
-    db.add(Message(chat_id=chat.id, position=len(chat.messages), role="user", content=body.content))
+    msg = Message(chat_id=chat.id, position=len(chat.messages), role="user", content=body.content)
+    db.add(msg)
+    db.flush()
+    for f in files:
+        f.chat_id, f.message_id = chat.id, msg.id
     chat.updated_at = now_ms()
     db.commit()
     return streaming(chat.id)

@@ -72,9 +72,10 @@
             <form class="op-composer" id="op-home-form" aria-label="Nouvelle question">
               <label class="op-sr" for="op-question">Votre message à l’assistant</label>
               <textarea id="op-question" rows="2" placeholder="Comment puis-je vous aider aujourd’hui ?"></textarea>
+              <div class="op-attachments" hidden></div>
               <div class="op-composer-tools">
                 <div class="op-composer-left">
-                  <button type="button" class="op-icon" aria-label="Joindre un document" data-action="soon"><i data-lucide="paperclip"></i></button>
+                  <button type="button" class="op-icon" aria-label="Joindre un fichier" data-action="attach"><i data-lucide="paperclip"></i></button>
                   <span class="op-tool-separator"></span>
                   <button type="button" class="op-tool-label" data-action="soon"><i data-lucide="sliders-horizontal"></i> Outils</button>
                 </div>
@@ -101,12 +102,13 @@
             <form class="op-composer op-chat-composer" id="op-chat-form" aria-label="Poursuivre la conversation">
               <label class="op-sr" for="op-chat-question">Votre message dans la conversation</label>
               <textarea id="op-chat-question" rows="2" placeholder="Poursuivez la conversation…"></textarea>
+              <div class="op-attachments" hidden></div>
               <div class="op-composer-tools">
                 <div class="op-composer-left">
-                  <button type="button" class="op-icon" aria-label="Joindre un document" data-action="soon"><i data-lucide="paperclip"></i></button>
+                  <button type="button" class="op-icon" aria-label="Joindre un fichier" data-action="attach"><i data-lucide="paperclip"></i></button>
                   <span class="op-tool-separator"></span>
                   <button type="button" class="op-icon op-context-tool" aria-label="Recherche web" data-action="soon"><i data-lucide="globe"></i></button>
-                  <button type="button" class="op-icon op-context-tool" aria-label="Analyse de données" data-action="soon"><i data-lucide="terminal"></i></button>
+                  <button type="button" class="op-icon op-context-tool" aria-label="Analyse de données" data-action="analysis-info"><i data-lucide="terminal"></i></button>
                 </div>
                 <div class="op-composer-right">
                   <button type="button" class="op-model" data-action="model"><span class="op-model-dot"></span> Opti · Qwen 3 <i data-lucide="chevron-down"></i></button>
@@ -167,6 +169,7 @@
       </section>
     </div>
     <div class="op-toast" role="status" hidden></div>
+    <input type="file" id="op-file-input" hidden multiple accept=".pdf,.docx,.txt,.md,.csv,.xlsx,.xlsm">
   </div>
 </div>
 

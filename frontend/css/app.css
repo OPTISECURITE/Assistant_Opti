@@ -80,3 +80,30 @@
   transition: background-color 9999s;
 }
 #opti-design .op-input-wrap input:focus { outline: none; }
+
+/* ===== Pièces jointes ===== */
+#opti-design .op-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+#opti-design .op-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 280px; font-size: 11px; color: var(--op-blue); background: var(--op-soft); border: 1px solid var(--op-border); padding: 5px 6px 5px 9px; border-radius: 8px; }
+#opti-design .op-chip svg { width: 14px; height: 14px; flex-shrink: 0; }
+#opti-design .op-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#opti-design .op-chip small { color: var(--op-faint); font-size: 10px; flex-shrink: 0; }
+#opti-design .op-chip button { display: flex; padding: 1px; border-radius: 4px; color: var(--op-muted); }
+#opti-design .op-chip button:hover { color: #a75751; }
+#opti-design .op-chip button svg { width: 13px; height: 13px; }
+#opti-design .op-chip.is-uploading { opacity: .65; }
+#opti-design .op-chip.is-uploading svg:first-child { animation: op-spin 1s linear infinite; }
+@keyframes op-spin { to { transform: rotate(360deg); } }
+#opti-design .op-message-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin: 0 0 8px auto; max-width: 85%; }
+#opti-design .op-composer.is-dragover { border-color: var(--op-blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--op-blue) 18%, transparent); background: var(--op-soft); }
+
+/* ===== Encart d'analyse (code exécuté + résultat) ===== */
+#opti-design .op-analysis { border: 1px solid var(--op-border); border-radius: 10px; margin: 0 0 12px; background: var(--op-surface); overflow: hidden; }
+#opti-design .op-analysis > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-size: 11px; font-weight: 600; color: var(--op-muted); }
+#opti-design .op-analysis > summary::-webkit-details-marker { display: none; }
+#opti-design .op-analysis > summary svg { width: 14px; height: 14px; color: var(--op-blue); }
+#opti-design .op-analysis > summary .op-chevron { margin-left: auto; transition: transform .16s; color: var(--op-faint); }
+#opti-design .op-analysis[open] > summary .op-chevron { transform: rotate(90deg); }
+#opti-design .op-analysis.is-error > summary { color: #a75751; }
+#opti-design .op-analysis.is-running > summary svg:first-child { animation: op-spin 1s linear infinite; }
+#opti-design .op-analysis pre { margin: 0 12px 12px; }
+#opti-design .op-analysis .op-analysis-label { font-size: 10px; letter-spacing: 1px; color: var(--op-faint); margin: 2px 12px 5px; font-weight: 600; }

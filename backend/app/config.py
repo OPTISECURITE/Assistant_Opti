@@ -34,3 +34,18 @@ SESSION_COOKIE = "opti_session"
 SESSION_DAYS = int(os.getenv("OPTI_SESSION_DAYS", "7"))
 # À passer à true dès que l'application est servie en HTTPS
 COOKIE_SECURE = os.getenv("OPTI_COOKIE_SECURE", "false").lower() == "true"
+
+# Fichiers joints
+FILES_DIR = DATA_DIR / "files"
+MAX_UPLOAD_MB = int(os.getenv("OPTI_MAX_UPLOAD_MB", "25"))
+DOC_CHAR_BUDGET = int(os.getenv("OPTI_DOC_CHAR_BUDGET", "24000"))        # texte de documents injecté (~7k tokens)
+HISTORY_CHAR_BUDGET = int(os.getenv("OPTI_HISTORY_CHAR_BUDGET", "20000"))  # historique conservé (~6k tokens)
+
+# Exécution du code d'analyse de données
+# docker     : conteneur jetable isolé (production)
+# subprocess : processus local limité (développement uniquement, non isolé)
+SANDBOX_MODE = os.getenv("OPTI_SANDBOX_MODE", "docker")
+SANDBOX_IMAGE = os.getenv("OPTI_SANDBOX_IMAGE", "opti-sandbox:1")
+SANDBOX_TIMEOUT = int(os.getenv("OPTI_SANDBOX_TIMEOUT", "60"))
+SANDBOX_MEMORY = os.getenv("OPTI_SANDBOX_MEMORY", "2g")
+MAX_ANALYSIS_STEPS = int(os.getenv("OPTI_MAX_ANALYSIS_STEPS", "3"))

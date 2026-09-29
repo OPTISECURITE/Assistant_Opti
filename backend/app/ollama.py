@@ -20,7 +20,7 @@ TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
 async def stream_chat(messages: list[dict]) -> AsyncIterator[str]:
     payload = {
         "model": config.MODEL,
-        "messages": [{"role": "system", "content": config.SYSTEM_PROMPT}, *messages],
+        "messages": messages,   # consigne système incluse par agent.build_messages
         "stream": True,
     }
     try:
