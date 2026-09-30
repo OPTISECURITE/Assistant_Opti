@@ -2,20 +2,25 @@
 API des conversations : lister, créer, lire, renommer, épingler, supprimer,
 envoyer un message (réponse en streaming, enregistrée en base) et régénérer.
 """
+import asyncio
+import datetime
 import logging
-from typing import AsyncIterator
+import re
+import shutil
+import unicodedata
+from typing import AsyncIterator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from . import agent, audit, config, settings
+from . import agent, audit, config, exports, settings
 from .auth import CurrentUser, current_user
 from .db import SessionLocal, get_db
-from .files import delete_files_of_chat, file_summary
-from .models import Chat, File, Message, now_ms
+from .files import delete_files_of_chat, file_dir, file_summary, save_output
+from .models import Chat, File, Message, User, now_ms
 
 log = logging.getLogger("opti.chats")
 router = APIRouter(prefix="/api/chats", tags=["chats"])
@@ -115,6 +120,20 @@ def delete_chat(chat_id: str, request: Request, user: CurrentUser = Depends(curr
 
 
 # ── Génération ───────────────────────────────────────────────────────────────
+class OutputSink:
+    """Enregistre les fichiers produits pendant une réponse (graphiques, exports) et les rattache à cette réponse."""
+
+    def __init__(self, db, chat: Chat, answer: Message) -> None:
+        self.db, self.chat, self.answer = db, chat, answer
+        owner = db.get(User, chat.owner_id)
+        self.actor_name = owner.username if owner else ""
+
+    def save(self, name: str, data: bytes) -> dict:
+        info = save_output(self.db, owner_id=self.chat.owner_id, chat_id=self.chat.id, message_id=self.answer.id, name=name, data=data)
+        audit.record(self.db, "file.generate", actor_name=self.actor_name, target=name, detail={"size": len(data), "chat": self.chat.id})
+        return info
+
+
 async def stream_and_store(chat_id: str, web_mode: str = "auto") -> AsyncIterator[str]:
     """
     Envoie l'historique à Ollama et enregistre la réponse au fil de l'eau.
@@ -132,7 +151,7 @@ async def stream_and_store(chat_id: str, web_mode: str = "auto") -> AsyncIterato
 
         parts: list[str] = []
         completed = False
-        tokens = agent.run(chat, files, web_mode)
+        tokens = agent.run(chat, files, web_mode, OutputSink(db, chat, answer))
         try:
             async for token in tokens:
                 parts.append(token)
@@ -140,7 +159,7 @@ async def stream_and_store(chat_id: str, web_mode: str = "auto") -> AsyncIterato
             completed = True
         finally:
             await tokens.aclose()   # coupe la requête Ollama et l'analyse en cours
-            answer.content = "".join(parts)
+            answer.content = exports.tidy_answer("".join(parts))      # document : rien avant ni après lui (voir exports.trim_document)
             answer.done = completed
             chat.updated_at = now_ms()
             if not answer.content:
@@ -182,6 +201,34 @@ def send_message(chat_id: str, body: NewMessage, request: Request,
     return streaming(chat.id, body.web_mode)
 
 
+def _slug(text: str) -> str:
+    t = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9]+", "-", t).strip("-").lower()[:50] or "document"
+
+
+@router.get("/{chat_id}/messages/{message_id}/export.{fmt}")
+def export_message(chat_id: str, message_id: str, fmt: Literal["docx", "pdf", "xlsx"], request: Request,
+                   user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """Une réponse de l'assistant mise en forme en Word, PDF ou Excel (le modèle rédige, le serveur met en page)."""
+    chat = get_owned_chat(db, chat_id, user)
+    msg = db.get(Message, message_id)
+    if not msg or msg.chat_id != chat.id or msg.role != "assistant":
+        raise HTTPException(status_code=404, detail="Réponse introuvable")
+    try:
+        data, media = exports.build(fmt, msg.content, chat.title)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Cette réponse est vide.")
+    except exports.NoTable:
+        raise HTTPException(status_code=422, detail="Cette réponse ne contient aucun tableau à exporter vers Excel.")
+    except Exception:
+        log.exception("Export %s impossible", fmt)
+        raise HTTPException(status_code=500, detail="La création du document a échoué.")
+    audit.record(db, "file.export", actor=user, target=chat.id, request=request, detail={"format": fmt, "message": message_id})
+    name = f"{_slug(chat.title)}-{datetime.date.today().isoformat()}.{fmt}"
+    return Response(data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"',
+                                                     "X-Content-Type-Options": "nosniff"})
+
+
 @router.post("/{chat_id}/regenerate")
 def regenerate(chat_id: str, body: Regenerate | None = None,
                user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
@@ -190,6 +237,9 @@ def regenerate(chat_id: str, body: Regenerate | None = None,
         raise HTTPException(status_code=400, detail="Conversation vide")
     last = chat.messages[-1]
     if last.role == "assistant":
+        for f in db.scalars(select(File).where(File.message_id == last.id)).all():
+            shutil.rmtree(file_dir(f.id), ignore_errors=True)
+            db.delete(f)
         db.delete(last)
         db.commit()
     return streaming(chat.id, body.web_mode if body else "auto")

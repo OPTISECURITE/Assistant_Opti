@@ -17,6 +17,12 @@ PY
     rm -f /tmp/assistant-backup.db
 fi
 
+# 1b. Clé de chiffrement des secrets des connexions API (sans elle, les secrets enregistrés seraient à ressaisir après une restauration)
+if [ -f data/secret.key ]; then
+    gpg --batch --yes --passphrase-file /root/.backup_passphrase \
+        -c --cipher-algo AES256 -o secret-key.gpg data/secret.key
+fi
+
 # 2. Commit + push (le .env et data/ restent exclus par le .gitignore)
 git add -A
 git commit -m "Sauvegarde $(date '+%F %H:%M')" || true

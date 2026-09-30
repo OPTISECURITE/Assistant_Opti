@@ -31,30 +31,137 @@ def _truncate(text: str, limit: int | None = OUTPUT_LIMIT) -> str:
     return text[:half] + "\n[… sortie tronquée …]\n" + text[-half:]
 
 
-async def run_code(code: str, files: list[tuple[Path, str]], *, timeout: int | None = None,
-                   output_limit: int | None = OUTPUT_LIMIT) -> tuple[bool, str]:
-    """
-    Exécute `code`. files = [(chemin sur le serveur, nom dans /data)]. Renvoie (succès, sortie).
-    timeout : durée maximale en secondes (par défaut celle des réglages).
-    output_limit : nombre de caractères de sortie conservés (None = tout).
-    """
-    timeout = timeout or settings.app().sandbox_timeout
+# ── Fichiers produits par le code (graphiques, exports) ──────────────────────────────────────────────────────
+# Le code écrit dans /out ; à la fin, les fichiers ressortent par la sortie standard (base64) : le conteneur n'a ni réseau,
+# ni disque inscriptible partagé avec le serveur. Tout est REVALIDÉ ici, car ce qui sort du conteneur n'est pas digne de confiance.
+OUTPUT_TYPES = {                       # extension : (type MIME, début attendu du contenu)
+    ".png": ("image/png", b"\x89PNG"),
+    ".jpg": ("image/jpeg", b"\xff\xd8"),
+    ".jpeg": ("image/jpeg", b"\xff\xd8"),
+    ".pdf": ("application/pdf", b"%PDF"),
+    ".xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", b"PK"),
+    ".docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", b"PK"),
+    ".csv": ("text/csv; charset=utf-8", None),
+    ".txt": ("text/plain; charset=utf-8", None),
+}
+IMAGE_EXT = {".png", ".jpg", ".jpeg"}
+MAX_OUT_FILES, MAX_OUT_FILE, MAX_OUT_TOTAL = 10, 15_000_000, 30_000_000
+
+OUTPUT_WRAPPER = r"""
+import base64, os, sys, traceback
+_CODE = __USER_CODE__
+_OUT = __OUT_DIR__
+_EXT = __EXTENSIONS__
+_failed = False
+try:
+    exec(compile(_CODE, "<analyse>", "exec"), {"__name__": "__main__"})
+except SystemExit:
+    pass
+except BaseException:
+    _failed = True
+    _t, _v, _tb = sys.exc_info()
+    traceback.print_exception(_t, _v, _tb.tb_next)          # sans la ligne de ce lanceur
+sys.stdout.write("\n"); sys.stdout.flush()
+try:
+    for _name in sorted(os.listdir(_OUT))[:50]:
+        _p = os.path.join(_OUT, _name)
+        if os.path.islink(_p) or not os.path.isfile(_p):
+            print("@@SKIP@@" + _name + " (lien ou dossier ignoré)"); continue
+        if os.path.splitext(_name)[1].lower() not in _EXT:
+            print("@@SKIP@@" + _name + " (type non autorisé)"); continue
+        if os.path.getsize(_p) > 15000000:
+            print("@@SKIP@@" + _name + " (trop volumineux)"); continue
+        with open(_p, "rb") as _f:
+            print("@@FILE@@" + base64.b64encode(_name.encode()).decode() + "@@" + base64.b64encode(_f.read()).decode())
+except Exception as _e:
+    print("@@SKIP@@lecture des fichiers impossible : " + str(_e))
+sys.exit(1 if _failed else 0)
+"""
+
+
+def validate_outputs(raw: list[tuple[str, bytes]]) -> tuple[list[tuple[str, bytes]], list[str]]:
+    """Filtre ce qui est sorti du conteneur : extension autorisée, contenu conforme, tailles, nombre."""
+    kept, skipped, total = [], [], 0
+    for name, data in raw:
+        base = os.path.basename(name.replace("\\", "/")).strip()[:120]
+        ext = os.path.splitext(base)[1].lower()
+        if not base or ext not in OUTPUT_TYPES:
+            skipped.append(f"{base or '?'} (type non autorisé)")
+        elif not data or len(data) > MAX_OUT_FILE:
+            skipped.append(f"{base} (vide ou trop volumineux)")
+        elif OUTPUT_TYPES[ext][1] and not data.startswith(OUTPUT_TYPES[ext][1]):
+            skipped.append(f"{base} (contenu invalide)")
+        elif len(kept) >= MAX_OUT_FILES or total + len(data) > MAX_OUT_TOTAL:
+            skipped.append(f"{base} (limite de fichiers atteinte)")
+        else:
+            kept.append((base, data))
+            total += len(data)
+    return kept, skipped
+
+
+def _parse_outputs(text: str) -> tuple[str, list[tuple[str, bytes]], list[str]]:
+    import base64
+    lines, raw, skipped = [], [], []
+    for line in text.split("\n"):
+        if line.startswith("@@FILE@@"):
+            try:
+                name_b64, data_b64 = line[8:].split("@@", 1)
+                raw.append((base64.b64decode(name_b64).decode("utf-8", "replace"), base64.b64decode(data_b64)))
+            except Exception:
+                skipped.append("un fichier illisible")
+        elif line.startswith("@@SKIP@@"):
+            skipped.append(line[8:][:200])
+        else:
+            lines.append(line)
+    kept, rejected = validate_outputs(raw)
+    return "\n".join(lines), kept, skipped + rejected
+
+
+class _TooBig(Exception):
+    pass
+
+
+async def _pump(proc, code: bytes, timeout: int, cap: int) -> bytes:
+    """Envoie le code et lit la sortie, bornée à `cap` octets. Lève TimeoutError ou _TooBig."""
+    async def go() -> bytes:
+        try:
+            proc.stdin.write(code)
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass                                            # le processus s'est arrêté avant d'avoir tout lu
+        finally:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+        chunks, total = [], 0
+        while True:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > cap:
+                raise _TooBig()
+            chunks.append(chunk)
+        await proc.wait()
+        return b"".join(chunks)
+    return await asyncio.wait_for(go(), timeout + 5)
+
+
+async def _execute(code: str, files: list[tuple[Path, str]], timeout: int, max_bytes: int,
+                   with_out: bool = False) -> tuple[int | None, bytes, str | None]:
+    """Exécute le code dans le bac à sable. Renvoie (code de retour, sortie brute, message d'erreur éventuel)."""
     if config.SANDBOX_MODE == "docker":
-        return await _run_docker(code, files, timeout, output_limit)
-    return await _run_subprocess(code, files, timeout, output_limit)
+        return await _exec_docker(code, files, timeout, max_bytes, with_out)
+    return await _exec_subprocess(code, files, timeout, max_bytes, with_out)
 
 
-async def _communicate(proc, code: str, on_timeout, timeout: int, output_limit) -> tuple[bool, str]:
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(code.encode()), timeout=timeout + 5)
-    except asyncio.TimeoutError:
-        await on_timeout()
-        return False, f"Erreur : l'exécution a dépassé {timeout} secondes et a été arrêtée."
-    text = out.decode(errors="replace").strip() or "(aucune sortie : utilise print() pour afficher les résultats)"
-    return proc.returncode == 0, _truncate(text, output_limit)
+def _wrap(code: str, out_dir: str) -> str:
+    return (OUTPUT_WRAPPER.replace("__USER_CODE__", repr(code)).replace("__OUT_DIR__", repr(out_dir))
+            .replace("__EXTENSIONS__", repr(sorted(OUTPUT_TYPES))))
 
 
-async def _run_docker(code: str, files: list[tuple[Path, str]], timeout: int, output_limit) -> tuple[bool, str]:
+async def _exec_docker(code, files, timeout, max_bytes, with_out):
     name = f"opti-sbx-{uuid.uuid4().hex[:12]}"
     cmd = [
         "docker", "run", "--rm", "-i", "--name", name,
@@ -65,35 +172,51 @@ async def _run_docker(code: str, files: list[tuple[Path, str]], timeout: int, ou
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--user", "10001:10001",
     ]
+    if with_out:
+        cmd += ["--tmpfs", "/out:rw,size=64m,mode=1777"]
     for host_path, inner in files:
         cmd += ["-v", f"{host_path}:/data/{inner}:ro"]
     cmd += [config.SANDBOX_IMAGE, "timeout", "-s", "KILL", str(timeout), "python", "-I", "-"]
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    except OSError as e:                                    # docker absent ou inaccessible
+        log.error("Docker introuvable ou inaccessible : %s", e)
+        return None, b"", "Erreur interne : le bac à sable d'analyse est indisponible."
 
     async def kill():
         k = await asyncio.create_subprocess_exec("docker", "kill", name,
                                                  stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         await k.wait()
 
-    ok, out = await _communicate(proc, code, kill, timeout, output_limit)
+    script = _wrap(code, "/out") if with_out else code
+    try:
+        raw = await _pump(proc, script.encode(), timeout, max_bytes)
+    except asyncio.TimeoutError:
+        await kill()
+        return None, b"", f"Erreur : l'exécution a dépassé {timeout} secondes et a été arrêtée."
+    except _TooBig:
+        await kill()
+        return None, b"", f"Erreur : la sortie du programme dépasse {max_bytes // 1_000_000} Mo : elle a été arrêtée."
     if proc.returncode == 137:
-        return False, "Erreur : l'exécution a été arrêtée (limite de temps ou de mémoire atteinte)."
+        return proc.returncode, raw, "Erreur : l'exécution a été arrêtée (limite de temps ou de mémoire atteinte)."
     if proc.returncode == 125:
-        log.error("Docker n'a pas pu lancer le bac à sable : %s", out)
-        return False, "Erreur interne : le bac à sable d'analyse est indisponible."
-    return ok, out
+        log.error("Docker n'a pas pu lancer le bac à sable : %s", raw[-500:].decode(errors="replace"))
+        return proc.returncode, raw, "Erreur interne : le bac à sable d'analyse est indisponible."
+    return proc.returncode, raw, None
 
 
-async def _run_subprocess(code: str, files: list[tuple[Path, str]], timeout: int, output_limit) -> tuple[bool, str]:
+async def _exec_subprocess(code, files, timeout, max_bytes, with_out):
     workdir = config.DATA_DIR / "sandbox-dev" / uuid.uuid4().hex[:12]
-    data_dir = workdir / "data"
+    data_dir, out_dir = workdir / "data", workdir / "out"
     data_dir.mkdir(parents=True)
+    out_dir.mkdir()
     for host_path, inner in files:
         os.symlink(host_path, data_dir / inner)
-    # En mode développement, les fichiers sont dans <workdir>/data et non /data
-    code = code.replace("/data/", f"{data_dir}/")
+    # En mode développement, les dossiers sont dans <workdir> et non à la racine
+    code = code.replace("/data/", f"{data_dir}/").replace("/out/", f"{out_dir}/")
+    script = _wrap(code, str(out_dir)) if with_out else code
 
     def limits():
         mem = 2 * 1024 ** 3
@@ -101,19 +224,54 @@ async def _run_subprocess(code: str, files: list[tuple[Path, str]], timeout: int
         resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
 
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-I", "-", cwd=workdir, env={"PATH": "/usr/bin:/bin"}, preexec_fn=limits,
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-
-    async def kill():
-        proc.kill()
-
+        sys.executable, "-I", "-", cwd=workdir, env={"PATH": "/usr/bin:/bin", "MPLBACKEND": "Agg", "MPLCONFIGDIR": str(workdir)},
+        preexec_fn=limits, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     try:
-        ok, out = await _communicate(proc, code, kill, timeout, output_limit)
-        return ok, out.replace(f"{data_dir}/", "/data/")
+        raw = await _pump(proc, script.encode(), timeout, max_bytes)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return None, b"", f"Erreur : l'exécution a dépassé {timeout} secondes et a été arrêtée."
+    except _TooBig:
+        proc.kill()
+        return None, b"", f"Erreur : la sortie du programme dépasse {max_bytes // 1_000_000} Mo : elle a été arrêtée."
     finally:
-        for p in sorted(workdir.rglob("*"), reverse=True):
-            p.unlink() if p.is_file() or p.is_symlink() else p.rmdir()
-        workdir.rmdir()
+        import shutil
+        shutil.rmtree(workdir, ignore_errors=True)
+    if proc.returncode is not None and proc.returncode < 0:          # tué par un signal (limite de temps processeur, mémoire…)
+        return proc.returncode, raw, "Erreur : l'exécution a été arrêtée (limite de temps ou de mémoire atteinte)."
+    return proc.returncode, raw.replace(f"{data_dir}/".encode(), b"/data/").replace(f"{out_dir}/".encode(), b"/out/"), None
+
+
+async def run_code(code: str, files: list[tuple[Path, str]], *, timeout: int | None = None,
+                   output_limit: int | None = OUTPUT_LIMIT, max_bytes: int | None = None) -> tuple[bool, str]:
+    """
+    Exécute `code`. files = [(chemin sur le serveur, nom dans /data)]. Renvoie (succès, sortie).
+    timeout : durée maximale en secondes (par défaut celle des réglages).
+    output_limit : nombre de caractères de sortie conservés (None = tout).
+    max_bytes : sortie maximale lue avant d'arrêter le programme.
+    """
+    timeout = timeout or settings.app().sandbox_timeout
+    cap = max_bytes or (5_000_000 if output_limit is not None else 30_000_000)
+    returncode, raw, error = await _execute(code, files, timeout, cap)
+    if error:
+        return False, error
+    text = raw.decode(errors="replace").strip() or "(aucune sortie : utilise print() pour afficher les résultats)"
+    return returncode == 0, _truncate(text, output_limit)
+
+
+async def run_analysis(code: str, files: list[tuple[Path, str]]) -> tuple[bool, str, list[tuple[str, bytes]]]:
+    """Comme run_code, avec un dossier /out où le code peut créer des graphiques et des fichiers : (succès, sortie, fichiers)."""
+    timeout = settings.app().sandbox_timeout
+    returncode, raw, error = await _execute(code, files, timeout, 45_000_000, with_out=True)
+    if error:
+        return False, error, []
+    text, produced, skipped = _parse_outputs(raw.decode(errors="replace"))
+    text = text.strip()
+    if not text:
+        text = "(aucun affichage)" if produced else "(aucune sortie : utilise print() pour afficher les résultats)"
+    if skipped:
+        text += "\nFichiers ignorés : " + " ; ".join(skipped)
+    return returncode == 0, _truncate(text), produced
 
 
 # ── Profil d'un fichier de données (code fixe, exécuté lui aussi dans le bac à sable) ──

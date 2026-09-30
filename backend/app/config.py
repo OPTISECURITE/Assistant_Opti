@@ -44,7 +44,7 @@ HISTORY_CHAR_BUDGET = int(os.getenv("OPTI_HISTORY_CHAR_BUDGET", "20000"))  # his
 # docker     : conteneur jetable isolé (production)
 # subprocess : processus local limité (développement uniquement, non isolé)
 SANDBOX_MODE = os.getenv("OPTI_SANDBOX_MODE", "docker")
-SANDBOX_IMAGE = os.getenv("OPTI_SANDBOX_IMAGE", "opti-sandbox:2")
+SANDBOX_IMAGE = os.getenv("OPTI_SANDBOX_IMAGE", "opti-sandbox:3")
 SANDBOX_TIMEOUT = int(os.getenv("OPTI_SANDBOX_TIMEOUT", "60"))
 SANDBOX_MEMORY = os.getenv("OPTI_SANDBOX_MEMORY", "2g")
 MAX_ANALYSIS_STEPS = int(os.getenv("OPTI_MAX_ANALYSIS_STEPS", "3"))
@@ -64,6 +64,8 @@ DOC_FULL_BUDGET = int(os.getenv("OPTI_DOC_FULL_BUDGET", "28000"))
 HISTORY_FULL_BUDGET = int(os.getenv("OPTI_HISTORY_FULL_BUDGET", "6000"))
 MAX_SECTIONS = int(os.getenv("OPTI_MAX_SECTIONS", "120"))   # sections lues au maximum par document
 
+# Certificat de l'autorité interne (ADCS), pour joindre en HTTPS interne les systèmes connectés (voir connections.py)
+CA_BUNDLE = os.getenv("OPTI_CA_BUNDLE", "")
 # Ports du STT et du TTS de l'agent vocal : le nombre de connexions ouvertes dessus donne le nombre d'appels en cours
 VOICE_PORTS = os.getenv("OPTI_VOICE_PORTS", "8080,8089")
 VOICE_CONNS_PER_CALL = max(1, int(os.getenv("OPTI_VOICE_CONNS_PER_CALL", "1")))   # connexions ouvertes par appel sur chacun de ces ports

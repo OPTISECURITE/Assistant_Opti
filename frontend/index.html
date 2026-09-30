@@ -163,6 +163,14 @@
       <button type="button" role="menuitem" class="op-thread-delete" data-action="delete"><i data-lucide="trash-2"></i> Supprimer</button>
     </div>
 
+    <!-- Menu de téléchargement d'une réponse -->
+    <div class="op-export-menu" hidden role="menu" aria-label="Télécharger la réponse">
+      <div class="op-thread-menu-heading">TÉLÉCHARGER LA RÉPONSE</div>
+      <button type="button" role="menuitem" data-action="export-do" data-format="docx"><i data-lucide="file-text"></i> Document Word (.docx)</button>
+      <button type="button" role="menuitem" data-action="export-do" data-format="pdf"><i data-lucide="file"></i> Document PDF</button>
+      <button type="button" role="menuitem" data-action="export-do" data-format="xlsx"><i data-lucide="sheet"></i> <span>Tableur Excel (.xlsx)</span></button>
+    </div>
+
     <!-- Fenêtre modale générique -->
     <div class="op-modal-backdrop" hidden>
       <section class="op-modal" role="dialog" aria-modal="true" aria-labelledby="op-modal-title">

@@ -23,7 +23,7 @@
     loggedIn: false,    // une session est ouverte dans ce navigateur
     webForced: false,   // bouton globe : recherche forcée pour les prochains messages
     follow: true,       // suivre la réponse en bas de l'écran (désactivé si l'utilisateur remonte)
-    prefs: { tone: 'neutre', length: 'equilibree', instructions: '', text_size: 'normal', send_key: 'enter', web_mode: 'auto', doc_mode: 'auto' },
+    prefs: { tone: 'neutre', length: 'equilibree', instructions: '', text_size: 'normal', send_key: 'enter', web_mode: 'auto', doc_mode: 'auto', disabled_connections: [] },
   };
 
   // ── Utilitaires ───────────────────────────────────────────────────────────
@@ -34,6 +34,64 @@
   const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text || ''));
 
   // Affiche une réponse : Markdown + regroupement « code exécuté / résultat » dans un encart repliable
+  // Fichiers créés par le code d'analyse : graphiques affichés, autres fichiers proposés au téléchargement
+  const UUID_RX = /^[0-9a-f-]{36}$/i;
+  const fileGlyph = (name) => (/\.(xlsx|csv)$/i.test(name) ? 'sheet' : 'file-text');
+  function filesBlock(pre) {
+    let list = [];
+    try { list = JSON.parse(pre.textContent.trim()); } catch { return null; }
+    const box = document.createElement('div');
+    box.className = 'op-files';
+    (Array.isArray(list) ? list : []).filter((f) => f && UUID_RX.test(f.id)).forEach((f) => {
+      const url = `/api/files/${f.id}/download`;
+      const name = String(f.name || 'fichier');
+      if (f.image) {
+        const fig = document.createElement('figure');
+        fig.className = 'op-figure';
+        const img = document.createElement('img');
+        img.src = `${url}?inline=1`; img.alt = `Graphique : ${name}`; img.loading = 'lazy';
+        const cap = document.createElement('figcaption');
+        const label = document.createElement('span');
+        label.textContent = name;
+        const dl = document.createElement('a');
+        dl.className = 'op-file-dl'; dl.href = url; dl.download = name; dl.title = 'Télécharger l’image';
+        dl.innerHTML = '<i data-lucide="download"></i> Télécharger';
+        cap.append(label, dl);
+        fig.append(img, cap);
+        box.appendChild(fig);
+      } else {
+        const card = document.createElement('div');
+        card.className = 'op-file-card';
+        card.innerHTML = `<i data-lucide="${fileGlyph(name)}"></i><span class="op-file-name"></span><small></small>`;
+        card.querySelector('.op-file-name').textContent = name;
+        card.querySelector('small').textContent = fmtSize(Number(f.size) || 0);
+        const dl = document.createElement('a');
+        dl.className = 'op-file-dl'; dl.href = url; dl.download = name;
+        dl.innerHTML = '<i data-lucide="download"></i> Télécharger';
+        card.appendChild(dl);
+        box.appendChild(card);
+      }
+    });
+    return box.children.length ? box : null;
+  }
+
+  // Carte d'un appel à une connexion API (Wipsos…) : ce qui a été consulté, jamais le résultat brut
+  function toolCard(pre) {
+    let c;
+    try { c = JSON.parse(pre.textContent.trim()); } catch { return null; }
+    const card = document.createElement('div');
+    card.className = 'op-sources op-tool' + (c.ok ? '' : ' is-error');
+    const head = document.createElement('div');
+    head.className = 'op-sources-head';
+    head.innerHTML = `<i data-lucide="${c.ok ? 'plug' : 'circle-alert'}"></i><span></span><em></em>`;
+    head.querySelector('span').textContent = `${c.connection || 'Connexion'} · ${c.operation || ''}`;
+    const params = Object.entries(c.params || {}).map(([k, v]) => `${k} = ${v}`).join(', ');
+    const secs = typeof c.ms === 'number' ? `${(c.ms / 1000).toFixed(1).replace('.', ',')} s` : '';
+    head.querySelector('em').textContent = [params, c.ok ? (c.count != null ? `${c.count} résultat${c.count > 1 ? 's' : ''}` : 'réponse reçue') : (c.error || 'échec'), secs].filter(Boolean).join(' · ');
+    card.appendChild(head);
+    return card;
+  }
+
   // Encart affiché quand la demande attend une place sur le GPU (l'agent vocal reste prioritaire)
   function waitingCard(pre) {
     const info = {};
@@ -166,8 +224,71 @@
     });
   }
 
-  function renderAnswer(el, text) {
-    el.innerHTML = renderMarkdown(text);
+  // Le modèle invente parfois de faux liens « Télécharger en PDF » vers « # » : ils ne servent à rien, le vrai
+  // téléchargement est le bouton sous la réponse. On les retire de l'affichage.
+  const FAKE_LINK = /\[[^\]\n]*(?:télécharg|download)[^\]\n]*\]\((?:#|[^)\s]*#)\)/i;
+  function stripFakeDownloads(text) {
+    return text.split('\n').filter((ln) => !(FAKE_LINK.test(ln)
+      || (/placeholders?/i.test(ln) && /liens? ci-dessus/i.test(ln))
+      || /^\W*télécharger\s.{0,60}\sau format\s*:?\s*$/i.test(ln))).join('\n').replace(/\n{3,}/g, '\n\n');
+  }
+
+  // Un document à rédiger est placé par le modèle entre <document> et </document> : affiché dans un cadre à part,
+  // c'est exactement ce qui est exporté en Word / PDF / Excel. Pendant l'écriture, la balise ouverte suffit.
+  const DOC_RX = /<document(?:\s[^>]*)?>([\s\S]*?)(?:<\/document\s*>|$)/gi;
+  function renderWithDocuments(text) {
+    let html = '', last = 0, m;
+    DOC_RX.lastIndex = 0;
+    while ((m = DOC_RX.exec(text)) !== null) {
+      html += renderMarkdown(text.slice(last, m.index));
+      html += '<div class="op-document" data-label="Document à télécharger">' + renderMarkdown(m[1].replace(/^\n+|\n+$/g, '')) + '</div>';
+      last = m.index + m[0].length;
+      if (m[0].length === 0) DOC_RX.lastIndex++;
+    }
+    return html + renderMarkdown(text.slice(last));
+  }
+  const tableScope = (el) => (el.querySelector('.op-document') ? '.op-document table' : 'table');
+
+  // Pendant l'écriture, le début d'une balise (« <docum ») ne doit pas s'afficher tel quel en attendant le « > »
+  const PARTIAL_TAG = /<\/?(?:d(?:o(?:c(?:u(?:m(?:e(?:n(?:t)?)?)?)?)?)?)?)?$|<document\s[^>]*$/i;
+
+  // Réponse sans document : aucune offre de téléchargement (liens, ou phrase du type « vous pouvez télécharger… »)
+  function stripDownloadOffers(text) {
+    return text.split('\n').filter((ln) => !(ln.length < 220 && /télécharg|download/i.test(ln)
+      && /bouton|liens?\b|ci-dessous|ci-dessus|sous cette réponse|cette réponse|au format|en (?:word|pdf|excel)/i.test(ln))).join('\n').replace(/\n{3,}/g, '\n\n');
+  }
+
+  function renderAnswer(el, text, partial = false) {
+    if (partial) text = text.replace(PARTIAL_TAG, '');
+    const hasDocument = /<document\b/i.test(text);
+    el.innerHTML = renderWithDocuments(hasDocument ? stripFakeDownloads(text) : stripDownloadOffers(stripFakeDownloads(text)));
+    // Liens de téléchargement écrits par le modèle ([Word](#telecharger-docx)) : rendus actifs. Excel seulement s'il y a un tableau.
+    el.querySelectorAll('a[href^="#telecharger-"]').forEach((a) => {
+      const fmt = a.getAttribute('href').slice('#telecharger-'.length);
+      if (!hasDocument || !['docx', 'pdf', 'xlsx'].includes(fmt) || (fmt === 'xlsx' && !el.querySelector(tableScope(el)))) { a.remove(); return; }
+      a.removeAttribute('href');
+      a.dataset.dl = fmt;
+      a.setAttribute('role', 'button');
+      a.tabIndex = 0;
+      a.className = 'op-dl-link';
+    });
+    // Retire les séparateurs orphelins (« · ») laissés par un lien supprimé
+    el.querySelectorAll('p').forEach((p) => {
+      if (!p.querySelector('.op-dl-link')) return;
+      p.normalize();
+      const sep = /^[\s·|,\-–—]*$/;
+      while (p.lastChild && p.lastChild.nodeType === 3 && sep.test(p.lastChild.nodeValue)) p.lastChild.remove();
+      while (p.firstChild && p.firstChild.nodeType === 3 && sep.test(p.firstChild.nodeValue)) p.firstChild.remove();
+      p.childNodes.forEach((n) => { if (n.nodeType === 3) n.nodeValue = n.nodeValue.replace(/(\s*[·|]\s*){2,}/g, ' · '); });
+    });
+    el.querySelectorAll('pre > code.language-outil').forEach((code) => {
+      const card = toolCard(code.parentElement);
+      if (card) code.parentElement.replaceWith(card); else code.parentElement.remove();
+    });
+    el.querySelectorAll('pre > code.language-fichiers').forEach((code) => {
+      const box = filesBlock(code.parentElement);
+      if (box) code.parentElement.replaceWith(box); else code.parentElement.remove();
+    });
     el.querySelectorAll('pre > code.language-attente').forEach((code) => {
       const card = waitingCard(code.parentElement);
       if (card) code.parentElement.replaceWith(card); else code.parentElement.remove();
@@ -313,9 +434,10 @@
   }
 
   // ── Fil de discussion ─────────────────────────────────────────────────────
-  function answerBlock(content, { streaming = false, interrupted = false } = {}) {
+  function answerBlock(content, { streaming = false, interrupted = false, messageId = null } = {}) {
     const wrap = document.createElement('div');
     wrap.className = 'op-answer' + (streaming ? ' is-streaming' : '');
+    if (messageId) wrap.dataset.message = messageId;
     wrap.innerHTML = `
       <img src="/static/img/mark.png" alt="">
       <div class="op-answer-body">
@@ -325,6 +447,7 @@
         <div class="op-answer-actions" aria-label="Actions sur la réponse">
           <button type="button" class="op-icon" aria-label="Copier la réponse" data-action="copy-answer"><i data-lucide="copy"></i></button>
           <button type="button" class="op-icon" aria-label="Régénérer la réponse" data-action="regenerate"><i data-lucide="refresh-cw"></i></button>
+          ${messageId && /<document\b/i.test(content) ? '<button type="button" class="op-export-btn" aria-label="Télécharger la réponse (Word, PDF, Excel)" aria-expanded="false" data-action="export-menu"><i data-lucide="download"></i> Télécharger</button>' : ''}
         </div>
       </div>`;
     renderAnswer(wrap.querySelector('.op-answer-content'), content);
@@ -346,7 +469,7 @@
         exchange.appendChild(bubble);
         thread.appendChild(exchange);
       } else if (exchange) {
-        exchange.appendChild(answerBlock(m.content, { interrupted: !m.done }));
+        exchange.appendChild(answerBlock(m.content, { interrupted: !m.done, messageId: m.id }));
       }
     }
     // seule la dernière réponse peut être régénérée
@@ -497,7 +620,7 @@
     setBusy(true);
 
     let full = '', pending = false, failed = false;
-    const paint = () => { pending = false; renderAnswer(contentEl, full); icons(); follow(); };
+    const paint = () => { pending = false; renderAnswer(contentEl, full, true); icons(); follow(); };
 
     try {
       const resp = await fetch(url, {
@@ -548,6 +671,31 @@
     refreshChats();
   }
 
+  // ── Connexions API : celles que l'administrateur m'ouvre, que je peux désactiver pour moi ───────────────────
+  async function loadConnections() {
+    const box = $('#op-conn-list');
+    if (!box) return;
+    let list = [];
+    try { list = await api('/api/connections'); } catch { return; }
+    if (!list.length) return;
+    box.innerHTML = '<label style="display:block;font-size:12px;font-weight:600;margin:16px 0 4px">Connexions</label><p class="op-hint" style="margin:0 0 6px;font-size:11px">Systèmes internes que l’assistant peut consulter pour vous, en lecture seule. Désactivée, une connexion n’est plus utilisée dans vos conversations.</p>';
+    list.forEach((c) => {
+      const row = document.createElement('label');
+      row.className = 'op-toggle';
+      row.innerHTML = '<span><b></b><small></small></span><input type="checkbox">';
+      row.querySelector('b').textContent = c.name;
+      row.querySelector('small').textContent = c.description || `${c.operations.length} opération(s)`;
+      const input = row.querySelector('input');
+      input.checked = c.active;
+      input.addEventListener('change', () => {
+        const off = new Set(state.prefs.disabled_connections || []);
+        input.checked ? off.delete(c.id) : off.add(c.id);
+        savePrefs({ disabled_connections: [...off] });
+      });
+      box.appendChild(row);
+    });
+  }
+
   // ── Recherche web : automatique par défaut, forçable avec le globe ─────────
   const getWebMode = () => state.prefs.web_mode || 'auto';
   const webModeFor = () => (state.webForced ? 'on' : getWebMode());
@@ -561,6 +709,69 @@
       b.classList.toggle('is-on', on);
       b.querySelector('span').textContent = on ? 'Outils · Web' : 'Outils';
     });
+  }
+
+  // ── Téléchargement d'une réponse (Word, PDF, Excel) ───────────────────────
+  function closeExportMenu(restoreFocus = false) {
+    const menu = $('.op-export-menu');
+    if (menu.hidden) return;
+    menu.hidden = true;
+    $$('[data-action="export-menu"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    if (restoreFocus) state.exportAnchor?.focus();
+  }
+  function openExportMenu(button) {
+    const menu = $('.op-export-menu');
+    if (!menu.hidden && state.exportAnchor === button) return closeExportMenu(true);
+    closeMenu();
+    const wrap = button.closest('.op-answer');
+    if (!wrap?.dataset.message || !state.active) return;
+    state.exportAnchor = button;
+    state.exportTarget = { chatId: state.active.id, messageId: wrap.dataset.message };
+    const content = wrap.querySelector('.op-answer-content');
+    const hasTable = !!content.querySelector(tableScope(content));
+    const xl = menu.querySelector('[data-format="xlsx"]');
+    xl.disabled = !hasTable;
+    xl.title = hasTable ? '' : 'Cette réponse ne contient aucun tableau';
+    menu.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    const r = button.getBoundingClientRect(), w = menu.offsetWidth, h = menu.offsetHeight;
+    menu.style.left = Math.max(12, Math.min(r.left, document.documentElement.clientWidth - w - 12)) + 'px';
+    const below = r.bottom + 5, above = r.top - h - 5;
+    menu.style.top = Math.max(12, below + h > document.documentElement.clientHeight - 12 ? above : below) + 'px';
+    menu.querySelector('button:not(:disabled)')?.focus();
+  }
+  function saveBlob(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function exportFromLink(a) {
+    const id = a.closest('.op-answer')?.dataset.message;
+    if (!id || !state.active) return toast('La réponse est encore en cours d’écriture : réessayez dans un instant.');
+    state.exportTarget = { chatId: state.active.id, messageId: id };
+    doExport(a.dataset.dl);
+  }
+
+  async function doExport(fmt) {
+    const target = state.exportTarget;
+    closeExportMenu();
+    if (!target) return;
+    toast('Création du document…');
+    try {
+      const resp = await fetch(`/api/chats/${target.chatId}/messages/${target.messageId}/export.${fmt}`);
+      if (resp.status === 401) return showLogin(SESSION_EXPIRED);
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        return toast(data.detail || 'La création du document a échoué.');
+      }
+      const name = (resp.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || `document.${fmt}`;
+      saveBlob(await resp.blob(), name);
+      toast('Document téléchargé.');
+    } catch { toast('Téléchargement impossible.'); }
   }
 
   // ── Pièces jointes ────────────────────────────────────────────────────────
@@ -696,6 +907,8 @@
     'close-modal': closeModal,
     soon: () => toast('Fonctionnalité prévue dans une prochaine étape.'),
     'thread-menu': openMenu,
+    'export-menu': openExportMenu,
+    'export-do': (btn) => doExport(btn.dataset.format),
     attach: () => { closeModal(); $('#op-file-input').click(); },
     'toggle-web': () => {
       setWebForced(!state.webForced);
@@ -710,8 +923,10 @@
            <option value="off">Jamais</option>
          </select>
          <p style="margin:0 0 6px;font-size:11px">Les requêtes sont anonymisées et affichées au-dessus de la réponse. Le bouton globe d’une conversation force une recherche.</p>
+         <div id="op-conn-list"></div>
          <button type="button" class="op-modal-row" data-action="attach"><i data-lucide="paperclip"></i><span>Joindre un fichier
            <small style="display:block">PDF, Word, texte, CSV ou Excel. Les données sont analysées sur le fichier complet.</small></span><i data-lucide="chevron-right"></i></button>`);
+      loadConnections();
       const sel = $('#op-web-mode');
       sel.value = getWebMode();
       sel.addEventListener('change', () => savePrefs({ web_mode: sel.value }));
@@ -796,7 +1011,8 @@
     help: () => modal('Bien démarrer',
       `<p>Décrivez votre besoin puis envoyez votre message avec Entrée (Maj + Entrée pour aller à la ligne).</p>
        <p>Vos conversations sont enregistrées : retrouvez-les dans la barre latérale, renommez-les ou épinglez-les avec le bouton « … ».</p>
-       <p>Pendant une réponse, le bouton d’envoi devient un bouton « stop » pour l’interrompre.</p>`),
+       <p>Pendant une réponse, le bouton d’envoi devient un bouton « stop » pour l’interrompre.</p>
+       <p>Quand l’assistant rédige un document (lettre, courrier, compte rendu…), il apparaît dans un cadre avec des liens pour le télécharger en Word ou en PDF. Pour un graphique, joignez un fichier de données ou donnez vos valeurs et demandez-le.</p>`),
 
     search: () => {
       modal('Rechercher une conversation',
@@ -824,7 +1040,10 @@
   // ── Écouteurs ─────────────────────────────────────────────────────────────
   root.addEventListener('click', (e) => {
     if (!e.target.closest('.op-thread-menu,[data-action="thread-menu"]')) closeMenu();
+    if (!e.target.closest('.op-export-menu,[data-action="export-menu"]')) closeExportMenu();
     if (!e.target.closest('.op-profile-anchor')) toggleProfile(false);
+    const dl = e.target.closest('a[data-dl]');
+    if (dl) { e.preventDefault(); exportFromLink(dl); return; }
     const home = e.target.closest('a[data-action="home"]');
     if (home && e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); actions.home(); return; }
     const b = e.target.closest('button');
@@ -870,9 +1089,10 @@
     if ($('.op-modal').classList.contains('is-wide')) return;
     closeModal();
   });
-  window.addEventListener('resize', () => closeMenu());
+  window.addEventListener('resize', () => { closeMenu(); closeExportMenu(); });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeMenu(true); closeModal(); toggleProfile(false); $('.op-app').classList.remove('op-nav-open'); }
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('a[data-dl]')) { e.preventDefault(); exportFromLink(e.target); return; }
+    if (e.key === 'Escape') { closeMenu(true); closeExportMenu(true); closeModal(); toggleProfile(false); $('.op-app').classList.remove('op-nav-open'); }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' && !$('.op-app').hidden) { e.preventDefault(); actions.search(); }
     const menu = $('.op-thread-menu');
     if (!menu.hidden && ['ArrowDown', 'ArrowUp'].includes(e.key)) {
@@ -904,6 +1124,7 @@
     renderPending();
     closeModal();
     closeMenu();
+    closeExportMenu();
     toggleProfile(false);
     // Rien ne doit rester affiché ni en mémoire pour le prochain utilisateur du poste
     $('#op-thread').replaceChildren();

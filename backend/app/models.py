@@ -125,3 +125,34 @@ class AuditLog(Base):
     target: Mapped[str] = mapped_column(String(300), default="")
     detail: Mapped[str] = mapped_column(Text, default="")      # JSON
     ip: Mapped[str] = mapped_column(String(64), default="")
+
+
+class ApiConnection(Base):
+    """Connexion vers un système interne interrogé en lecture seule (Wipsos…). Les secrets sont chiffrés (voir vault.py)."""
+    __tablename__ = "api_connection"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    slug: Mapped[str] = mapped_column(String(20), unique=True)          # préfixe du nom des outils : <slug>__<opération>
+    description: Mapped[str] = mapped_column(Text, default="")          # à quoi sert la connexion (lu par le modèle)
+    base_url: Mapped[str] = mapped_column(String(500))
+    auth_type: Mapped[str] = mapped_column(String(16), default="none")  # none | bearer | header | basic
+    auth_header: Mapped[str] = mapped_column(String(100), default="")   # nom de l'en-tête (auth_type = header)
+    username: Mapped[str] = mapped_column(String(200), default="")      # identifiant (auth_type = basic)
+    secret_enc: Mapped[str] = mapped_column(Text, default="")           # jeton / clé / mot de passe, chiffré
+    verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
+    timeout_s: Mapped[int] = mapped_column(Integer, default=15)
+    test_path: Mapped[str] = mapped_column(String(300), default="/")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    allow_all: Mapped[bool] = mapped_column(Boolean, default=False)     # tous les utilisateurs, sinon ceux de api_grant
+    operations: Mapped[str] = mapped_column(Text, default="[]")         # JSON : opérations décrites (voir connections.Operation)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+    updated_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+
+
+class ApiGrant(Base):
+    """Autorisation d'un utilisateur à se servir d'une connexion."""
+    __tablename__ = "api_grant"
+
+    connection_id: Mapped[str] = mapped_column(ForeignKey("api_connection.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("user.id", ondelete="CASCADE"), primary_key=True)

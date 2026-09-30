@@ -77,7 +77,7 @@ sans réseau, système de fichiers en lecture seule, utilisateur non privilégi�
 64 processus, 60 secondes maximum, fichiers de la conversation montés en lecture seule dans `/data`.
 
 ```bash
-docker build -t opti-sandbox:2 deploy/sandbox
+docker build -t opti-sandbox:3 deploy/sandbox
 venv/bin/python backend/manage.py test-sandbox     # les 5 contrôles d'isolation, la lecture PDF et l'OCR doivent être ✓
 ```
 
@@ -137,3 +137,58 @@ connexions, et l'onglet Charge doit afficher « 1 appel en cours ».
 - **Journal d'audit** (Administration → Journal) : connexions (réussies, échouées, blocages), comptes, réglages, messages envoyés
   (sans leur texte), fichiers déposés, exports, purges. Jamais le contenu des conversations, ni un mot de passe (un mot de passe
   tapé dans le champ identifiant est masqué). Export CSV (formules neutralisées). Conservé `audit_retention_days` jours (365 par défaut).
+
+## Documents et graphiques
+
+- **Boutons sous chaque réponse** (`backend/app/exports.py`) : Word, PDF et Excel, mis en forme par le serveur (logo Opti, titres,
+  listes, tableaux, pied de page « généré par une IA, à vérifier ») à partir du Markdown de la réponse. Aucun code écrit par le
+  modèle. L'Excel reprend chaque tableau de la réponse (un onglet par tableau, nombres français reconnus, jamais de formule).
+- **Graphiques et fichiers créés par l'analyse** : quand un fichier de données est joint, ou quand un graphique est demandé, le code
+  écrit dans `/out` (matplotlib, pandas, python-docx, reportlab). Les fichiers sortent du conteneur par la sortie standard, sont
+  revalidés côté serveur (types autorisés : png, jpg, pdf, xlsx, docx, csv, txt ; contenu vérifié ; 10 fichiers et 15 Mo au plus),
+  puis affichés (images) ou proposés au téléchargement. Ils sont supprimés avec la conversation.
+- Polices du PDF : DejaVu (`apt install fonts-dejavu-core`) ; sinon Helvetica, sans certains symboles.
+- **Liens de téléchargement écrits par le modèle** : en fin de réponse, il écrit `[Télécharger en Word](#telecharger-docx)`
+  (ou `-pdf`, `-xlsx`). L'application les rend actifs (`renderAnswer` dans `app.js`) ; le lien Excel n'est gardé que si la réponse
+  contient un tableau ; ces lignes n'apparaissent jamais dans les documents exportés. Le bouton « Télécharger » reste toujours
+  disponible sous la réponse. Les faux liens (vers « # » ou vers la page) sont retirés (`stripFakeDownloads`, `exports.strip_fake_downloads`).
+- **Seul le document est exporté** : pour une lettre, un compte rendu, etc., le modèle place le contenu entre `<document>` et
+  `</document>` (consigne `FILES_PROMPT` dans `agent.py`), ses commentaires et conseils avant ou après. L'interface l'affiche dans un
+  cadre à part ; `exports.prepare` n'exporte que l'intérieur (plusieurs documents : séparés par un trait ; balise non fermée : tout ce
+  qui suit). Un document délimité n'a ni titre ni date ajoutés automatiquement. Sans balises, l'export retire quand même la phrase
+  d'introduction (« Voici… ») et le bloc de conseils final (« Remarque : », « Conseil : », « N'hésitez pas »…).
+- Logo et pied de page des Word/PDF : Administration → Recherche & fichiers → Documents exportés (par défaut : ni logo ni bandeau, ni mention, ni numéro de page).
+
+### Mode rédaction (le serveur impose le format)
+
+Quand la demande est de rédiger un document (`DOC_REQUEST_RX` dans `agent.py` : rédige / écris / prépare / crée / propose /
+réponds / raccourcis… + lettre, mail, compte rendu, procédure, planning, tableau…), le modèle reçoit `DOC_ONLY_PROMPT` : sa réponse
+entière est le document. Le serveur ajoute lui-même les balises `<document>` et les liens de téléchargement (Excel seulement s'il y
+a un tableau), coupe la recherche web, puis, à la fin, `exports.trim_document` retire l'introduction (« Voici… ») et tout ce qui suit
+la signature (« À noter », informations générales, conseils, emojis, propositions de modification). Sans formule de politesse
+(procédure, note), seuls les blocs de fin évidents sont retirés. Les informations inconnues sont laissées en `[champs à compléter]`.
+Le contenu nettoyé est celui qui est enregistré : conversation, Word, PDF et Excel sont identiques.
+
+**L'offre de téléchargement est réservée aux documents** : le bouton « Télécharger » et les liens n'apparaissent que sous une réponse
+qui contient un document (cadre `<document>`). Pour toute autre réponse, les liens et les phrases du type « vous pouvez télécharger
+cette réponse » sont retirés, à l'affichage (`stripDownloadOffers` dans `app.js`) et dans ce qui est enregistré
+(`exports.tidy_answer`). Les fichiers produits par l'analyse (graphiques, Excel) gardent leurs cartes de téléchargement.
+
+## Connexions API (Wipsos…)
+
+Administration → Connexions. Une connexion = adresse + authentification (aucune, jeton Bearer, clé dans un en-tête, identifiant et mot
+de passe) + **opérations** de consultation (GET) décrites à la main ou importées d'une spécification OpenAPI/Swagger (aucune n'est
+activée à l'import). Chaque opération activée devient un outil que Qwen peut appeler (`backend/app/connections.py`, boucle d'outils dans
+`agent._tool_loop`) : le serveur exécute la requête, renvoie le résultat au modèle, qui répond à partir des données réelles ; une carte
+indique ce qui a été consulté (jamais le résultat brut).
+
+Garde-fous : GET seulement ; le modèle ne fournit que les valeurs de paramètres déclarés (types et énumérations validés, valeurs
+encodées, « .. » refusé) et ne vise que l'adresse configurée ; redirections non suivies ; réponse limitée à 400 Ko, durée limitée ;
+30 appels par minute et par utilisateur ; secrets chiffrés (`data/secret.key`, sauvegardée par `deploy/backup.sh`) et jamais renvoyés ;
+accès par utilisateur (ou tous) ; chaque appel et chaque action d'administration est journalisé (jamais les secrets) ; la recherche web
+automatique est coupée pour les utilisateurs qui ont une connexion, et refusée dans une conversation qui en a consulté une.
+
+Limites de cette version : consultation seule ; un seul compte de service par connexion (les droits se règlent par utilisateur autorisé,
+pas par les droits propres de chaque utilisateur dans le système distant) ; les outils ne sont pas proposés dans les réponses de
+rédaction de document ni pendant l'analyse d'un fichier de données.
+HTTPS interne : renseigner `OPTI_CA_BUNDLE` (certificat de l'autorité interne) dans `.env`.

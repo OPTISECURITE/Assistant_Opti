@@ -11,7 +11,10 @@ import shutil
 import unicodedata
 from pathlib import Path
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -187,6 +190,40 @@ def remove(file_id: str, user: CurrentUser = Depends(current_user), db: Session 
     db.delete(f)
     db.commit()
     shutil.rmtree(file_dir(file_id), ignore_errors=True)
+
+
+def save_output(db: Session, *, owner_id: str, chat_id: str, message_id: str, name: str, data: bytes) -> dict:
+    """Enregistre un fichier produit par le code d'analyse (graphique, export) et renvoie sa description."""
+    f = File(id=new_id(), owner_id=owner_id, chat_id=chat_id, message_id=message_id, filename=name[:255],
+             stored_name=safe_name(name), kind="output", size=len(data))
+    d = file_dir(f.id)
+    d.mkdir(parents=True, exist_ok=True)
+    d.chmod(0o755)
+    (d / f.stored_name).write_bytes(data)
+    db.add(f)
+    db.commit()
+    return {"id": f.id, "name": f.filename, "size": f.size, "image": Path(f.stored_name).suffix.lower() in sandbox.IMAGE_EXT}
+
+
+@router.get("/{file_id}/download")
+def download(file_id: str, request: Request, inline: bool = False, user: CurrentUser = Depends(current_user),
+             db: Session = Depends(get_db)):
+    """Télécharge un fichier produit par l'assistant (le sien uniquement). `inline` n'affiche que les images."""
+    f = db.get(File, file_id)
+    path = file_path(f) if f else None
+    if not f or f.owner_id != user.id or f.kind != "output" or not path.is_file():
+        raise HTTPException(404, "Fichier introuvable")
+    ext = path.suffix.lower()
+    media = sandbox.OUTPUT_TYPES.get(ext, ("application/octet-stream", None))[0]
+    show = inline and ext in sandbox.IMAGE_EXT
+    if not show:
+        audit.record(db, "file.download", actor=user, target=f.filename, request=request, detail={"size": f.size})
+    headers = {
+        "Content-Disposition": f"{'inline' if show else 'attachment'}; filename=\"{f.stored_name}\"; filename*=UTF-8''{quote(f.filename)}",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=3600",
+    }
+    return FileResponse(path, media_type=media, headers=headers)
 
 
 def delete_files_of_chat(db: Session, chat_id: str) -> None:

@@ -18,6 +18,18 @@ TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
 
 
 async def stream_chat(messages: list[dict]) -> AsyncIterator[str]:
+    """Texte seul (voir stream_events pour les appels d'outils)."""
+    events = stream_events(messages)
+    try:
+        async for kind, payload in events:
+            if kind == "text":
+                yield payload
+    finally:
+        await events.aclose()               # ferme aussitôt la requête vers Ollama si le consommateur s'arrête
+
+
+async def stream_events(messages: list[dict], tools: list[dict] | None = None) -> AsyncIterator[tuple[str, object]]:
+    """Événements du modèle : ('text', jeton) ou ('tool_calls', [{'name', 'arguments'}]). Les erreurs sortent en texte lisible."""
     s = settings.app()
     payload = {
         "model": s.model,
@@ -25,13 +37,15 @@ async def stream_chat(messages: list[dict]) -> AsyncIterator[str]:
         "stream": True,
         "options": {"temperature": s.temperature},
     }
+    if tools:
+        payload["tools"] = tools
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             async with client.stream("POST", f"{config.OLLAMA_URL}/api/chat", json=payload) as resp:
                 if resp.status_code != 200:
                     body = (await resp.aread()).decode(errors="replace")
                     log.error("Ollama %s : %s", resp.status_code, body[:500])
-                    yield _error_message(body)
+                    yield "text", _error_message(body)
                     return
                 async for line in resp.aiter_lines():
                     if not line.strip():
@@ -42,16 +56,30 @@ async def stream_chat(messages: list[dict]) -> AsyncIterator[str]:
                         continue
                     if "error" in data:
                         log.error("Ollama (flux) : %s", data["error"])
-                        yield _error_message(str(data["error"]))
+                        yield "text", _error_message(str(data["error"]))
                         return
-                    token = data.get("message", {}).get("content", "")
+                    msg = data.get("message", {})
+                    token = msg.get("content", "")
                     if token:
-                        yield token
+                        yield "text", token
+                    calls = []
+                    for tc in msg.get("tool_calls") or []:
+                        fn = tc.get("function", {})
+                        args = fn.get("arguments") or {}
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except ValueError:
+                                args = {}
+                        if fn.get("name"):
+                            calls.append({"name": fn["name"], "arguments": args})
+                    if calls:
+                        yield "tool_calls", calls
                     if data.get("done"):
                         return
     except httpx.ConnectError:
         log.error("Ollama injoignable sur %s", config.OLLAMA_URL)
-        yield "\n\n> ⚠️ Le modèle est momentanément indisponible. Réessayez dans un instant."
+        yield "text", "\n\n> ⚠️ Le modèle est momentanément indisponible. Réessayez dans un instant."
 
 
 def _error_message(raw: str) -> str:

@@ -33,6 +33,10 @@ class AppSettings(BaseModel):
     analysis_enabled: bool = True
     max_analysis_steps: int = Field(default=config.MAX_ANALYSIS_STEPS, ge=1, le=5)
     sandbox_timeout: int = Field(default=config.SANDBOX_TIMEOUT, ge=10, le=300)
+    # Documents exportés (Word, PDF)
+    export_logo: bool = False                                       # logo Opti en en-tête (désactivé par défaut : document sans bandeau)
+    export_footer: str = Field(default="", max_length=200)          # mention en pied de page (vide = aucune)
+    export_page_numbers: bool = False                               # numéroter les pages (utile pour un long document, pas pour une lettre)
     # Charge : le GPU est partagé avec l'agent vocal (voir scheduler.py)
     ollama_slots: int = Field(default=8, ge=1, le=64)               # OLLAMA_NUM_PARALLEL du serveur
     voice_reserve: int = Field(default=1, ge=0, le=8)               # places gardées en plus des appels en cours
@@ -57,6 +61,7 @@ class UserPrefs(BaseModel):
     text_size: Literal["normal", "grand", "tres-grand"] = "normal"
     send_key: Literal["enter", "ctrl-enter"] = "enter"
     web_mode: Literal["auto", "on", "off"] = "auto"
+    disabled_connections: list[str] = Field(default_factory=list, max_length=50)   # connexions API que l'utilisateur a désactivées pour lui
     doc_mode: Literal["auto", "full"] = "auto"      # documents longs : automatique ou lecture complète à chaque question
 
 

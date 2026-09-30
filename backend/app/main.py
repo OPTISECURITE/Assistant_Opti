@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import admin, auth_routes, chats, config, files, me, retention, scheduler, settings
+from . import admin, auth_routes, chats, config, connections_routes, files, me, retention, scheduler, settings
 from .auth import current_user
 from .db import SessionLocal, init_db
 
@@ -39,6 +39,8 @@ app.include_router(chats.router)
 app.include_router(files.router)
 app.include_router(me.router)
 app.include_router(admin.router)
+app.include_router(connections_routes.router)
+app.include_router(connections_routes.user_router)
 
 
 @app.get("/api/health")

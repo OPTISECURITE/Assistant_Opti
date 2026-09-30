@@ -41,7 +41,7 @@
   const fmtDate = (ts) => (ts ? new Date(ts).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : 'jamais');
   const FIELD_NAMES = { password: 'Le mot de passe', username: 'L’identifiant', display_name: 'Le nom affiché',
     system_prompt: 'La consigne système', model_label: 'Le nom affiché du modèle', searxng_url: 'L’adresse de SearXNG',
-    session_idle_minutes: 'Le délai d’inactivité', session_max_hours: 'La durée maximale de session',
+    export_footer: 'La mention en pied de page', session_idle_minutes: 'Le délai d’inactivité', session_max_hours: 'La durée maximale de session',
     retention_days: 'La durée de conservation des conversations', audit_retention_days: 'La durée de conservation du journal',
     ollama_slots: 'Le nombre de places d’Ollama', voice_reserve: 'La réserve', max_assistant_slots: 'Le plafond de places',
     max_per_user: 'Le plafond par utilisateur', queue_timeout_seconds: 'Le délai d’attente' };
@@ -52,6 +52,7 @@
     if (d.type === 'string_too_long') return `${name} est trop long (${d.ctx?.max_length} caractères au maximum).`;
     if (d.type === 'string_pattern_mismatch' && field === 'username') return `${name} ne peut contenir que des lettres, chiffres, points, tirets et underscores (sans espace ni accent).`;
     if (d.type?.startsWith('greater_than') || d.type?.startsWith('less_than')) return `${name} est hors des limites autorisées.`;
+    if (d.type === 'value_error') return String(d.msg || '').replace(/^Value error, /, '');
     return `${name} n’est pas valide.`;
   };
   const errMsg = async (resp) => {
@@ -207,6 +208,7 @@
     { label: 'Utilisateurs', icon: 'users', render: renderUsers },
     { label: 'Modèle', icon: 'cpu', render: renderModel },
     { label: 'Recherche & fichiers', icon: 'globe', render: renderFeatures },
+    { label: 'Connexions', icon: 'plug', render: renderConnections },
     { label: 'Charge', icon: 'gauge', render: renderLoad },
     { label: 'Sécurité', icon: 'shield-check', render: renderSecurity },
     { label: 'Journal', icon: 'scroll-text', render: renderAudit },
@@ -395,8 +397,15 @@
           <div class="op-field"><label for="a-timeout">Durée maximale d’un calcul (s)</label><input type="number" id="a-timeout" min="10" max="300"></div>
           <div class="op-field"><label for="ocr-max">Pages scannées lues par PDF (OCR)</label><input type="number" id="ocr-max" min="1" max="300"></div>
         </div></section>
+      <section><h3>Documents exportés (Word, PDF)</h3>
+        <p class="op-hint">Seul le contenu du document rédigé par l’assistant est exporté (sans ses commentaires ni ses conseils).</p>
+        ${toggle('e-logo', 'Logo Opti Sécurité en en-tête', 'Coché : un bandeau avec le logo apparaît en haut de chaque page. Décoché : le document ne contient que son texte.', v.export_logo)}
+        ${toggle('e-pages', 'Numéroter les pages', 'Utile pour un long document (procédure, rapport) ; inutile pour une lettre.', v.export_page_numbers)}
+        <div class="op-field"><label for="e-footer">Mention en pied de page (facultative)</label><input type="text" id="e-footer" maxlength="200" placeholder="Laisser vide : aucun pied de page"></div>
+        <p class="op-hint">Exemple : « Document généré par l’Assistant Opti, à vérifier avant diffusion ».</p></section>
       <div class="op-pane-actions"><button type="button" class="op-primary" id="x-save">Enregistrer</button></div>`;
     const $p = (s) => pane.querySelector(s);
+    $p('#e-footer').value = v.export_footer;
     $p('#w-results').value = v.web_results;
     $p('#w-pages').value = v.web_pages_read;
     $p('#w-url').value = v.searxng_url;
@@ -411,6 +420,7 @@
           searxng_url: $p('#w-url').value.trim(), uploads_enabled: $p('#f-on').checked, analysis_enabled: $p('#a-on').checked,
           max_upload_mb: Number($p('#f-max').value), max_analysis_steps: Number($p('#a-steps').value), sandbox_timeout: Number($p('#a-timeout').value),
           ocr_enabled: $p('#ocr-on').checked, max_ocr_pages: Number($p('#ocr-max').value),
+          export_logo: $p('#e-logo').checked, export_footer: $p('#e-footer').value.trim(), export_page_numbers: $p('#e-pages').checked,
         });
         O.toast('Réglages enregistrés.');
       } catch (e) { O.toast(e.message); }
@@ -495,6 +505,284 @@
   }
 
   // ── Charge : partage du GPU avec l'agent vocal ────────────────────────────
+  // ── Connexions API (Wipsos…) ──────────────────────────────────────────────────────────────────────────────
+  const AUTH_LABELS = { none: 'Aucune', bearer: 'Jeton (Bearer)', header: 'Clé dans un en-tête', basic: 'Identifiant et mot de passe' };
+  const TYPE_LABELS = { string: 'texte', integer: 'entier', number: 'nombre', boolean: 'booléen' };
+  const TYPE_FROM = { texte: 'string', string: 'string', entier: 'integer', integer: 'integer', nombre: 'number', number: 'number', 'booléen': 'boolean', booleen: 'boolean', boolean: 'boolean' };
+
+  const paramsToText = (params) => params.map((p) => [p.name, p.where === 'path' ? 'chemin' : 'requête', TYPE_LABELS[p.type] || 'texte',
+    p.required || p.where === 'path' ? 'oui' : 'non', p.description || '', (p.enum || []).join(',')].join(' | ')).join('\n');
+
+  function parseParams(text) {
+    const params = [], errors = [];
+    text.split('\n').map((l) => l.trim()).filter(Boolean).forEach((line, i) => {
+      const [name = '', where = 'requête', type = 'texte', req = 'non', desc = '', en = ''] = line.split('|').map((x) => x.trim());
+      if (!/^[A-Za-z_][A-Za-z0-9_.\-]{0,48}$/.test(name)) return errors.push(`Ligne ${i + 1} : nom de paramètre invalide (« ${name} »).`);
+      const w = /^(chemin|path)$/i.test(where) ? 'path' : /^(requ[êe]te|query)$/i.test(where) ? 'query' : null;
+      if (!w) return errors.push(`Ligne ${i + 1} : indiquez « chemin » ou « requête ».`);
+      const t = TYPE_FROM[type.toLowerCase()];
+      if (!t) return errors.push(`Ligne ${i + 1} : type inconnu (« ${type} »). Types : texte, entier, nombre, booléen.`);
+      const p = { name, where: w, type: t, required: w === 'path' || /^(oui|yes|true|1)$/i.test(req), description: desc };
+      const values = en.split(',').map((x) => x.trim()).filter(Boolean);
+      if (values.length) p.enum = values;
+      params.push(p);
+    });
+    return { params, errors };
+  }
+
+  async function renderConnections(pane) {
+    let list = [];
+    try { list = await O.api('/api/admin/connections'); } catch { pane.textContent = 'Chargement impossible.'; return; }
+    pane.innerHTML = `
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <div><h3>Connexions API</h3><p class="op-hint" style="margin:0">Systèmes internes (Wipsos…) que l’assistant peut consulter, en lecture seule, pour répondre aux questions.</p></div>
+          <button type="button" class="op-primary" style="padding:9px 16px;font-size:11px" id="cn-new"><i data-lucide="plus"></i> Nouvelle connexion</button>
+        </div>
+        ${list.length ? `<table class="op-table" style="margin-top:12px"><thead><tr><th>Connexion</th><th>Adresse</th><th>Accès</th><th>Opérations</th><th>Statut</th><th></th></tr></thead><tbody></tbody></table>`
+          : `<div class="op-inline-form" style="margin-top:14px"><h3>Aucune connexion</h3><p class="op-hint" style="margin:0">Ajoutez par exemple Wipsos : adresse de l’API, authentification, puis choisissez les opérations que l’assistant peut utiliser (consultation d’un client, de ses factures, d’un tarif…).</p></div>`}
+        <p class="op-hint" style="margin-top:14px">Sécurité : consultation seule (aucune modification possible), secrets chiffrés, accès par utilisateur, chaque appel est journalisé.</p>
+      </section>`;
+    const tbody = pane.querySelector('tbody');
+    list.forEach((c) => {
+      const tr = document.createElement('tr');
+      const access = c.allow_all ? 'Tous les utilisateurs' : c.users.length ? `${c.users.length} utilisateur${c.users.length > 1 ? 's' : ''}` : 'Personne';
+      tr.innerHTML = `<td><b></b><small></small></td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></td><td>${access}</td>
+        <td>${c.ops_enabled} / ${c.operations.length}</td><td><span class="op-badge ${c.enabled ? '' : 'is-off'}">${c.enabled ? 'Active' : 'Désactivée'}</span></td>
+        <td style="white-space:nowrap;text-align:right"><button type="button" class="op-icon" data-c="test" aria-label="Tester la connexion"><i data-lucide="activity"></i></button>
+        <button type="button" class="op-icon" data-c="edit" aria-label="Modifier"><i data-lucide="pencil"></i></button>
+        <button type="button" class="op-icon" data-c="delete" aria-label="Supprimer"><i data-lucide="trash-2"></i></button></td>`;
+      tr.querySelector('b').textContent = c.name;
+      tr.querySelector('small').textContent = c.description;
+      tr.children[1].textContent = c.base_url; tr.children[1].title = c.base_url;
+      tr.querySelector('[data-c=edit]').addEventListener('click', () => editConnection(pane, c));
+      tr.querySelector('[data-c=test]').addEventListener('click', async () => {
+        O.toast('Test en cours…');
+        try { const r = await send(`/api/admin/connections/${c.id}/test`, 'POST'); O.toast(r.message); } catch (e) { O.toast(e.message); }
+      });
+      tr.querySelector('[data-c=delete]').addEventListener('click', () => {
+        const box = pane.querySelector('section');
+        box.insertAdjacentHTML('afterbegin', `<div class="op-inline-form" id="cn-del"><h3>Supprimer « ${esc(c.name)} » ?</h3><p class="op-hint">L’assistant n’aura plus accès à ce système. Les conversations passées ne sont pas modifiées.</p>
+          <div class="op-pane-actions"><button type="button" class="op-primary op-danger" id="cn-del-go">Supprimer</button><button type="button" class="op-secondary" id="cn-del-no">Annuler</button></div></div>`);
+        pane.querySelector('#cn-del-no').addEventListener('click', () => pane.querySelector('#cn-del').remove());
+        pane.querySelector('#cn-del-go').addEventListener('click', async () => {
+          try { await send(`/api/admin/connections/${c.id}`, 'DELETE'); O.toast('Connexion supprimée.'); renderConnections(pane); } catch (e) { O.toast(e.message); }
+        });
+      });
+      tbody.appendChild(tr);
+    });
+    pane.querySelector('#cn-new').addEventListener('click', () => editConnection(pane, null));
+    O.icons();
+  }
+
+  async function editConnection(pane, conn) {
+    const isNew = !conn;
+    let users = [];
+    try { users = await O.api('/api/admin/users'); } catch { /* liste vide */ }
+    const st = { ops: structuredClone(conn?.operations || []), users: new Set(conn?.users || []), allowAll: conn?.allow_all ?? false, filter: '' };
+    const c = conn || { name: '', description: '', base_url: '', auth_type: 'bearer', auth_header: 'X-API-Key', username: '', has_secret: false, verify_tls: true, timeout_s: 15, test_path: '/', enabled: true };
+    pane.innerHTML = `<div id="cn-editor">
+      <button type="button" class="op-link" id="cn-back" style="margin-bottom:10px">← Retour aux connexions</button>
+      <section><h3>${isNew ? 'Nouvelle connexion' : 'Connexion « ' + esc(c.name) + ' »'}</h3>
+        <div class="op-grid2">
+          <div class="op-field"><label for="cn-name">Nom</label><input type="text" id="cn-name" maxlength="60" placeholder="Wipsos"></div>
+          <div class="op-field"><label for="cn-url">Adresse de l’API</label><input type="url" id="cn-url" placeholder="https://wipsos.amg.lan/api"></div>
+        </div>
+        <div class="op-field"><label for="cn-desc">À quoi sert cette connexion ?</label><textarea id="cn-desc" rows="2" maxlength="600" placeholder="CRM : clients, contrats, factures et tarifs d’Opti Sécurité."></textarea>
+          <p class="op-hint" style="margin-top:4px">L’assistant s’en sert pour savoir quand consulter ce système.</p></div>
+        ${toggle('cn-enabled', 'Connexion active', 'Désactivée, elle n’est proposée à personne.', c.enabled)}
+      </section>
+      <section><h3>Authentification</h3>
+        <div class="op-grid2">
+          <div class="op-field"><label for="cn-auth">Méthode</label><select id="cn-auth">${Object.entries(AUTH_LABELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+          <div class="op-field" id="cn-f-header"><label for="cn-header">Nom de l’en-tête</label><input type="text" id="cn-header" placeholder="X-API-Key"></div>
+          <div class="op-field" id="cn-f-user"><label for="cn-user">Identifiant</label><input type="text" id="cn-user" autocomplete="off"></div>
+          <div class="op-field" id="cn-f-secret"><label for="cn-secret" id="cn-secret-label">Jeton</label><input type="password" id="cn-secret" autocomplete="new-password" placeholder="${c.has_secret ? '•••••••• (inchangé)' : ''}"></div>
+        </div>
+        <div class="op-grid2">
+          <div class="op-field"><label for="cn-test">Chemin de test</label><input type="text" id="cn-test" placeholder="/api/ping"><p class="op-hint" style="margin-top:4px">Une adresse légère qui répond quand tout va bien.</p></div>
+          <div class="op-field"><label for="cn-timeout">Délai maximal d’une requête (s)</label><input type="number" id="cn-timeout" min="3" max="60"></div>
+        </div>
+        ${toggle('cn-tls', 'Vérifier le certificat TLS', 'À décocher seulement pour un test. En HTTPS interne, ajoutez plutôt l’autorité de certification (OPTI_CA_BUNDLE).', c.verify_tls)}
+        <div class="op-pane-actions"><button type="button" class="op-secondary" id="cn-test-go" ${isNew ? 'disabled title="Enregistrez d’abord la connexion"' : ''}>Tester la connexion</button><span class="op-hint" id="cn-test-out" style="margin:0"></span></div>
+      </section>
+      <section><h3>Opérations disponibles pour l’assistant</h3>
+        <p class="op-hint">Chaque opération est une consultation (GET). Seules celles que vous activez sont proposées au modèle. Décrivez-les clairement : c’est ce texte qui lui dit quand et comment s’en servir.</p>
+        <div class="op-pane-actions" style="margin-top:0"><button type="button" class="op-secondary" id="cn-imp-open"><i data-lucide="file-json"></i> Importer une spécification OpenAPI…</button>
+          <button type="button" class="op-secondary" id="cn-op-add"><i data-lucide="plus"></i> Ajouter une opération</button></div>
+        <div id="cn-imp"></div><div id="cn-opform"></div>
+        <input type="text" id="cn-filter" placeholder="Filtrer les opérations…" style="margin-top:12px" hidden>
+        <div id="cn-ops" style="margin-top:8px"></div>
+      </section>
+      <section><h3>Qui peut l’utiliser ?</h3>
+        <div class="op-choices"><label><input type="radio" name="cn-access" value="all"><span>Tous les utilisateurs</span></label><label><input type="radio" name="cn-access" value="some"><span>Utilisateurs choisis</span></label></div>
+        <div id="cn-users" style="margin-top:10px;max-height:170px;overflow-y:auto"></div>
+        <p class="op-hint">Chaque utilisateur peut aussi désactiver une connexion pour lui, dans le menu Outils de la conversation.</p>
+      </section>
+      <div id="cn-foot"><div class="op-pane-actions"><button type="button" class="op-primary" id="cn-save">${isNew ? 'Créer la connexion' : 'Enregistrer'}</button><button type="button" class="op-secondary" id="cn-cancel">Annuler</button></div></div></div>`;
+    const $p = (sel) => pane.querySelector(sel);
+    $p('#cn-editor').addEventListener('input', () => showFormError($p('#cn-foot'), ''));      // l'erreur disparaît dès qu'on corrige
+    $p('#cn-name').value = c.name; $p('#cn-url').value = c.base_url; $p('#cn-desc').value = c.description; $p('#cn-auth').value = c.auth_type;
+    $p('#cn-header').value = c.auth_header || 'X-API-Key'; $p('#cn-user').value = c.username; $p('#cn-test').value = c.test_path; $p('#cn-timeout').value = c.timeout_s;
+
+    const syncAuth = () => {
+      const t = $p('#cn-auth').value;
+      $p('#cn-f-header').hidden = t !== 'header'; $p('#cn-f-user').hidden = t !== 'basic'; $p('#cn-f-secret').hidden = t === 'none';
+      $p('#cn-secret-label').textContent = t === 'basic' ? 'Mot de passe' : t === 'header' ? 'Clé d’API' : 'Jeton';
+    };
+    $p('#cn-auth').addEventListener('change', syncAuth); syncAuth();
+    $p('#cn-back').addEventListener('click', () => renderConnections(pane));
+    $p('#cn-cancel').addEventListener('click', () => renderConnections(pane));
+
+    // ── accès
+    const drawUsers = () => {
+      pane.querySelector(`input[name=cn-access][value=${st.allowAll ? 'all' : 'some'}]`).checked = true;
+      const box = $p('#cn-users');
+      box.hidden = st.allowAll;
+      box.innerHTML = users.filter((u) => u.active).map((u) => `<label class="op-toggle" style="padding:6px 0"><span>${esc(u.display_name)} <small>${esc(u.username)}</small></span><input type="checkbox" data-uid="${u.id}" ${st.users.has(u.id) ? 'checked' : ''}></label>`).join('') || '<p class="op-hint">Aucun utilisateur actif.</p>';
+      box.querySelectorAll('input').forEach((i) => i.addEventListener('change', () => { i.checked ? st.users.add(i.dataset.uid) : st.users.delete(i.dataset.uid); }));
+    };
+    pane.querySelectorAll('input[name=cn-access]').forEach((r) => r.addEventListener('change', () => { st.allowAll = r.value === 'all'; drawUsers(); }));
+    drawUsers();
+
+    // ── opérations
+    const drawOps = () => {
+      const box = $p('#cn-ops');
+      const f = st.filter.trim().toLowerCase();
+      $p('#cn-filter').hidden = st.ops.length <= 8;
+      const shown = st.ops.map((o, i) => [o, i]).filter(([o]) => !f || `${o.id} ${o.label} ${o.path} ${o.description}`.toLowerCase().includes(f));
+      box.innerHTML = shown.length ? '' : `<p class="op-hint">${st.ops.length ? 'Aucune opération ne correspond.' : 'Aucune opération. Importez une spécification OpenAPI ou ajoutez-en une à la main.'}</p>`;
+      shown.forEach(([o, i]) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--op-border)';
+        row.innerHTML = `<label class="op-toggle" style="padding:0;flex:1;min-width:0"><span style="overflow:hidden"><b></b><small style="font-family:monospace"></small></span><input type="checkbox" ${o.enabled ? 'checked' : ''}></label>
+          <button type="button" class="op-icon" data-o="try" aria-label="Essayer" ${isNew ? 'disabled' : ''}><i data-lucide="play"></i></button>
+          <button type="button" class="op-icon" data-o="edit" aria-label="Modifier"><i data-lucide="pencil"></i></button>
+          <button type="button" class="op-icon" data-o="del" aria-label="Retirer"><i data-lucide="x"></i></button>`;
+        row.querySelector('b').textContent = o.label || o.id;
+        row.querySelector('small').textContent = `GET ${o.path}`;
+        row.querySelector('input').addEventListener('change', (e) => { o.enabled = e.target.checked; });
+        row.querySelector('[data-o=edit]').addEventListener('click', () => opForm(i));
+        row.querySelector('[data-o=del]').addEventListener('click', () => { st.ops.splice(i, 1); drawOps(); });
+        row.querySelector('[data-o=try]').addEventListener('click', () => tryForm(o));
+        box.appendChild(row);
+      });
+      O.icons();
+    };
+    $p('#cn-filter').addEventListener('input', (e) => { st.filter = e.target.value; drawOps(); });
+
+    function opForm(index) {
+      const o = index == null ? { id: '', label: '', description: '', method: 'GET', path: '/', params: [], enabled: true, max_chars: 8000 } : st.ops[index];
+      const box = $p('#cn-opform');
+      box.innerHTML = `<div class="op-inline-form"><h3>${index == null ? 'Nouvelle opération' : 'Modifier l’opération'}</h3>
+        <div class="op-grid2"><div class="op-field"><label for="of-label">Titre</label><input type="text" id="of-label" maxlength="120" placeholder="Factures d’un client"></div>
+          <div class="op-field"><label for="of-id">Identifiant</label><input type="text" id="of-id" maxlength="41" placeholder="factures_client"></div></div>
+        <div class="op-field"><label for="of-path">Chemin (GET)</label><input type="text" id="of-path" placeholder="/clients/{client_id}/factures" style="font-family:monospace"></div>
+        <div class="op-field"><label for="of-desc">Description pour l’assistant</label><textarea id="of-desc" rows="3" maxlength="800" placeholder="Liste les factures d’un client à partir de son identifiant. Filtre possible : statut."></textarea></div>
+        <div class="op-field"><label for="of-params">Paramètres (un par ligne)</label><textarea id="of-params" rows="4" style="font-family:monospace;font-size:11px" placeholder="client_id | chemin | entier | oui | Identifiant du client&#10;statut | requête | texte | non | Statut de la facture | payee,impayee"></textarea>
+          <p class="op-hint" style="margin-top:4px">Format : nom | chemin ou requête | texte, entier, nombre ou booléen | obligatoire (oui/non) | description | valeurs possibles (facultatif). Les {parametres} du chemin doivent être déclarés « chemin ».</p></div>
+        <div class="op-field"><label for="of-max">Taille maximale du résultat donné à l’assistant (caractères)</label><input type="number" id="of-max" min="500" max="30000"></div>
+        <div class="op-pane-actions"><button type="button" class="op-primary" id="of-ok">Valider</button><button type="button" class="op-secondary" id="of-no">Annuler</button></div></div>`;
+      const q = (sel) => box.querySelector(sel);
+      q('#of-label').value = o.label; q('#of-id').value = o.id; q('#of-path').value = o.path; q('#of-desc').value = o.description;
+      q('#of-params').value = paramsToText(o.params); q('#of-max').value = o.max_chars;
+      q('#of-no').addEventListener('click', () => (box.innerHTML = ''));
+      q('#of-ok').addEventListener('click', () => {
+        const { params, errors } = parseParams(q('#of-params').value);
+        const id = q('#of-id').value.trim(), path = q('#of-path').value.trim();
+        const err = errors[0]
+          || (!/^[a-z][a-z0-9_]{0,40}$/.test(id) ? 'L’identifiant doit commencer par une lettre minuscule et ne contenir que des minuscules, chiffres et « _ ».' : '')
+          || (!path.startsWith('/') ? 'Le chemin doit commencer par « / ».' : '')
+          || (st.ops.some((x, i) => x.id === id && i !== index) ? 'Une autre opération porte déjà cet identifiant.' : '');
+        if (err) return showFormError(box.firstElementChild, err);
+        const inPath = [...path.matchAll(/\{([^{}]+)\}/g)].map((m) => m[1]).sort().join(',');
+        if (inPath !== params.filter((p) => p.where === 'path').map((p) => p.name).sort().join(',')) return showFormError(box.firstElementChild, 'Les {parametres} du chemin doivent correspondre exactement aux paramètres de type « chemin ».');
+        const next = { ...o, id, label: q('#of-label').value.trim() || id, path, description: q('#of-desc').value.trim(), params, max_chars: Number(q('#of-max').value) || 8000, method: 'GET' };
+        if (index == null) st.ops.push(next); else st.ops[index] = next;
+        box.innerHTML = ''; drawOps();
+      });
+      q('#of-label').focus();
+    }
+    $p('#cn-op-add').addEventListener('click', () => opForm(null));
+
+    function tryForm(o) {
+      const box = $p('#cn-opform');
+      box.innerHTML = `<div class="op-inline-form"><h3>Essayer « ${esc(o.label || o.id)} »</h3>
+        <p class="op-hint">Envoie une vraie requête avec les valeurs saisies et montre ce que l’assistant recevrait. L’essai est journalisé. Enregistrez d’abord vos modifications.</p>
+        ${o.params.map((p, i) => `<div class="op-field"><label for="tr-${i}">${esc(p.name)}${p.required ? ' *' : ''} <small>${esc(p.description)}</small></label><input type="text" id="tr-${i}"></div>`).join('') || '<p class="op-hint">Cette opération n’a pas de paramètre.</p>'}
+        <div class="op-pane-actions"><button type="button" class="op-primary" id="tr-go">Lancer l’essai</button><button type="button" class="op-secondary" id="tr-no">Fermer</button></div>
+        <div id="tr-out"></div></div>`;
+      box.querySelector('#tr-no').addEventListener('click', () => (box.innerHTML = ''));
+      box.querySelector('#tr-go').addEventListener('click', async () => {
+        const params = {};
+        o.params.forEach((p, i) => { const v = box.querySelector(`#tr-${i}`).value.trim(); if (v) params[p.name] = v; });
+        const out = box.querySelector('#tr-out'); out.innerHTML = '<p class="op-hint">Requête en cours…</p>';
+        try {
+          const r = await send(`/api/admin/connections/${conn.id}/try`, 'POST', { operation: o.id, params });
+          const card = r.card;
+          out.innerHTML = `<p class="op-hint" style="margin:8px 0 4px"><b></b></p><pre style="max-height:220px;overflow:auto;font-size:11px;white-space:pre-wrap;word-break:break-word;background:var(--op-bg);border:1px solid var(--op-border);border-radius:8px;padding:10px"></pre>`;
+          out.querySelector('b').textContent = card.ok ? `Réponse reçue (${card.status}, ${card.ms} ms${card.count != null ? ', ' + card.count + ' élément(s)' : ''})` : `Échec : ${card.error || 'erreur'}`;
+          out.querySelector('pre').textContent = r.result;
+        } catch (e) { out.innerHTML = ''; showFormError(box.firstElementChild, e.message); }
+      });
+    }
+
+    // ── importer une spécification
+    $p('#cn-imp-open').addEventListener('click', () => {
+      const box = $p('#cn-imp');
+      box.innerHTML = `<div class="op-inline-form"><h3>Importer une spécification OpenAPI / Swagger</h3>
+        <p class="op-hint">Indiquez l’adresse du fichier (souvent …/openapi.json ou …/swagger.json) ou collez son contenu (JSON ou YAML). Seules les opérations de consultation (GET) sont importées, et aucune n’est activée : vous choisissez ensuite.</p>
+        <div class="op-field"><label for="im-url">Adresse de la spécification</label><input type="url" id="im-url" placeholder="https://wipsos.amg.lan/openapi.json"></div>
+        <div class="op-field"><label for="im-text">… ou contenu collé</label><textarea id="im-text" rows="4" style="font-family:monospace;font-size:11px"></textarea></div>
+        <div class="op-pane-actions"><button type="button" class="op-primary" id="im-go">Lire</button><button type="button" class="op-secondary" id="im-no">Annuler</button></div></div>`;
+      box.querySelector('#im-no').addEventListener('click', () => (box.innerHTML = ''));
+      box.querySelector('#im-go').addEventListener('click', async () => {
+        const url = box.querySelector('#im-url').value.trim(), text = box.querySelector('#im-text').value.trim();
+        if (!url && !text) return showFormError(box.firstElementChild, 'Indiquez une adresse ou collez le contenu de la spécification.');
+        try {
+          const r = await send('/api/admin/connections/import', 'POST', { url: url || null, text: text || null, connection_id: conn?.id || null });
+          const known = new Set(st.ops.map((o) => o.id));
+          const added = r.operations.filter((o) => !known.has(o.id));
+          st.ops.push(...added);
+          if (!$p('#cn-url').value.trim() && r.base_url) $p('#cn-url').value = r.base_url;
+          if (!$p('#cn-name').value.trim() && r.title) $p('#cn-name').value = r.title.slice(0, 60);
+          box.innerHTML = ''; drawOps();
+          O.toast(`${added.length} opération(s) de consultation importée(s)${r.skipped ? `, ${r.skipped} ignorée(s)` : ''}. Activez celles que l’assistant peut utiliser.`);
+        } catch (e) { showFormError(box.firstElementChild, e.message); }
+      });
+    });
+    drawOps();
+
+    // ── test, enregistrement
+    if (!isNew) $p('#cn-test-go').addEventListener('click', async () => {
+      const out = $p('#cn-test-out'); out.textContent = 'Test en cours…';
+      try { const r = await send(`/api/admin/connections/${conn.id}/test`, 'POST'); out.textContent = r.message; out.style.color = r.ok ? '#2f7d4f' : '#a75751'; }
+      catch (e) { out.textContent = e.message; out.style.color = '#a75751'; }
+    });
+    $p('#cn-save').addEventListener('click', async () => {
+      showFormError($p('#cn-foot'), '');
+      const type = $p('#cn-auth').value;
+      const body = { name: $p('#cn-name').value.trim(), description: $p('#cn-desc').value.trim(), base_url: $p('#cn-url').value.trim(), auth_type: type,
+        auth_header: type === 'header' ? $p('#cn-header').value.trim() : '', username: type === 'basic' ? $p('#cn-user').value.trim() : '',
+        verify_tls: $p('#cn-tls').checked, timeout_s: Number($p('#cn-timeout').value) || 15, test_path: $p('#cn-test').value.trim() || '/',
+        enabled: $p('#cn-enabled').checked, allow_all: st.allowAll, users: [...st.users], operations: st.ops };
+      const secret = $p('#cn-secret').value;
+      if (type === 'none') body.secret = '';
+      else if (secret !== '') body.secret = secret;
+      else if (isNew || !c.has_secret) return showFormError($p('#cn-foot'), type === 'basic' ? 'Indiquez le mot de passe.' : 'Indiquez le jeton ou la clé d’API.');
+      if (body.name.length < 2) return showFormError($p('#cn-foot'), 'Donnez un nom à la connexion (2 caractères au moins).');
+      if (!body.base_url) return showFormError($p('#cn-foot'), 'Indiquez l’adresse de l’API.');
+      if (type === 'header' && !body.auth_header) return showFormError($p('#cn-foot'), 'Indiquez le nom de l’en-tête qui porte la clé.');
+      try {
+        const saved = await send(isNew ? '/api/admin/connections' : `/api/admin/connections/${conn.id}`, isNew ? 'POST' : 'PUT', body);
+        O.toast('Connexion enregistrée.');
+        if (isNew) { const t = await send(`/api/admin/connections/${saved.id}/test`, 'POST').catch(() => null); if (t) O.toast(t.message); }
+        renderConnections(pane);
+      } catch (e) { showFormError($p('#cn-foot'), e.message); }
+    });
+    O.icons();
+  }
+
   async function renderLoad(pane) {
     const { values: v } = await loadAppSettings();
     pane.innerHTML = `

@@ -143,6 +143,18 @@ def test_pdf(tmp: str) -> tuple[bool, bool]:
     return "Bonjour sandbox" in r["pages"][0]["text"], bool(r["ocr_available"])
 
 
+def test_chart() -> bool:
+    """Le code peut-il tracer un graphique dans /out et le faire sortir du conteneur ?"""
+    from app import sandbox
+    code = ("import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+            "plt.bar(['a', 'b'], [1, 2]); plt.title('Essai'); plt.savefig('/out/essai.png', dpi=60)\n")
+    ok, out, produced = asyncio.run(sandbox.run_analysis(code, []))
+    if not (ok and produced and produced[0][0] == "essai.png" and produced[0][1].startswith(b"\x89PNG")):
+        print(f"      → {out[-300:]}")
+        return False
+    return True
+
+
 def test_sandbox():
     """Vérifie que le bac à sable calcule correctement ET qu'il est bien isolé."""
     from app import config, sandbox
@@ -160,6 +172,7 @@ def test_sandbox():
             ("Pas d'accès aux données de l'application", "import os\nprint(os.path.exists('/opt/assistant-opti'))", True, "False"),
         ]
         pdf_ok, ocr_ok = test_pdf(tmp)
+        chart_ok = test_chart()
         failures = 0
         for label, code, want_ok, expect in tests:
             ok, out = asyncio.run(sandbox.run_code(code, [(csv, "test.csv")]))
@@ -167,8 +180,10 @@ def test_sandbox():
             failures += not good
             print(f"  [{'✓' if good else '✗'}] {label}" + ("" if good else f"\n      → {out[-300:]}"))
     print(f"  [{'✓' if pdf_ok else '✗'}] Lecture d'un PDF dans le bac à sable")
+    print(f"  [{'✓' if chart_ok else '✗'}] Création d'un graphique (matplotlib) et sortie du fichier"
+          + ("" if chart_ok else f"\n      → reconstruire l'image : docker build -t {config.SANDBOX_IMAGE} deploy/sandbox"))
     print(f"  [{'✓' if ocr_ok else '!'}] OCR des PDF scannés : {'disponible' if ocr_ok else 'indisponible (reconstruire l’image : docker build -t ' + config.SANDBOX_IMAGE + ' deploy/sandbox)'}")
-    failures += not pdf_ok
+    failures += (not pdf_ok) + (not chart_ok)
     if config.SANDBOX_MODE != "docker":
         print("  [!] Mode subprocess : AUCUNE isolation réelle. Ne pas utiliser en production.")
     print("Bac à sable OK." if not failures else f"{failures} test(s) en échec.")
