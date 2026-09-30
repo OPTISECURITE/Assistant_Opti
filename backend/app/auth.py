@@ -101,6 +101,11 @@ def create_session(db: DbSession, user: User) -> str:
     return token
 
 
+def user_of_token(db: DbSession, token: str | None) -> User | None:
+    sess = db.get(Session, _digest(token)) if token else None
+    return db.get(User, sess.user_id) if sess else None
+
+
 def delete_session(db: DbSession, token: str | None) -> None:
     if token:
         db.execute(delete(Session).where(Session.token_hash == _digest(token)))

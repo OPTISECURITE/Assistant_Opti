@@ -5,13 +5,13 @@ envoyer un message (réponse en streaming, enregistrée en base) et régénérer
 import logging
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from . import agent, config, settings
+from . import agent, audit, config, settings
 from .auth import CurrentUser, current_user
 from .db import SessionLocal, get_db
 from .files import delete_files_of_chat, file_summary
@@ -106,11 +106,12 @@ def update_chat(chat_id: str, body: ChatUpdate,
 
 
 @router.delete("/{chat_id}", status_code=204)
-def delete_chat(chat_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+def delete_chat(chat_id: str, request: Request, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     chat = get_owned_chat(db, chat_id, user)
     delete_files_of_chat(db, chat.id)
     db.delete(chat)
     db.commit()
+    audit.record(db, "chat.delete", actor=user, target=chat_id, request=request)
 
 
 # ── Génération ───────────────────────────────────────────────────────────────
@@ -158,7 +159,7 @@ def streaming(chat_id: str, web_mode: str = "auto") -> StreamingResponse:
 
 
 @router.post("/{chat_id}/messages")
-def send_message(chat_id: str, body: NewMessage,
+def send_message(chat_id: str, body: NewMessage, request: Request,
                  user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     chat = get_owned_chat(db, chat_id, user)
     files = []
@@ -176,6 +177,8 @@ def send_message(chat_id: str, body: NewMessage,
         f.chat_id, f.message_id = chat.id, msg.id
     chat.updated_at = now_ms()
     db.commit()
+    audit.record(db, "chat.message", actor=user, target=chat.id, request=request,
+                 detail={"files": len(files), "web": body.web_mode})   # jamais le texte du message
     return streaming(chat.id, body.web_mode)
 
 

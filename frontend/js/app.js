@@ -34,6 +34,28 @@
   const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text || ''));
 
   // Affiche une réponse : Markdown + regroupement « code exécuté / résultat » dans un encart repliable
+  // Encart affiché quand la demande attend une place sur le GPU (l'agent vocal reste prioritaire)
+  function waitingCard(pre) {
+    const info = {};
+    pre.textContent.split('\n').forEach((line) => { try { Object.assign(info, JSON.parse(line)); } catch {} });
+    if (info.status === 'done') return null;              // l'attente est terminée : rien à afficher
+    const card = document.createElement('div');
+    card.className = 'op-sources is-running';
+    const head = document.createElement('div');
+    head.className = 'op-sources-head';
+    head.innerHTML = '<i data-lucide="loader-circle"></i><span></span><em></em>';
+    head.querySelector('span').textContent = 'En attente d’une place';
+    if (info.position) head.querySelector('em').textContent = `vous êtes n° ${info.position} dans la file`;
+    card.appendChild(head);
+    const row = document.createElement('div');
+    row.style.cssText = 'font-size:11px;padding:6px 6px 2px;color:var(--op-muted);line-height:1.6';
+    row.textContent = info.calls > 0
+      ? `L’assistant laisse la priorité aux appels téléphoniques en cours (${info.calls}). Votre demande démarre dès qu’une place se libère.`
+      : 'Beaucoup de demandes sont en cours. La vôtre démarre dès qu’une place se libère.';
+    card.appendChild(row);
+    return card;
+  }
+
   // Encart affiché quand un document est lu : progression, puis couverture (pages lues, avertissements)
   function readingCard(pre) {
     const info = {};
@@ -146,6 +168,10 @@
 
   function renderAnswer(el, text) {
     el.innerHTML = renderMarkdown(text);
+    el.querySelectorAll('pre > code.language-attente').forEach((code) => {
+      const card = waitingCard(code.parentElement);
+      if (card) code.parentElement.replaceWith(card); else code.parentElement.remove();
+    });
     el.querySelectorAll('pre > code.language-lecture').forEach((code) => code.parentElement.replaceWith(readingCard(code.parentElement)));
     let sources = [];
     el.querySelectorAll('pre > code.language-recherche').forEach((code) => {

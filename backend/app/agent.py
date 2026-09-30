@@ -8,19 +8,23 @@ Construction du contexte envoyé au modèle et boucle d'analyse de données.
    le bac à sable, on affiche la sortie puis on lui redonne la main. Au plus
    MAX_ANALYSIS_STEPS exécutions.
 """
+import asyncio
 import json
 import logging
 import re
+import time
+from dataclasses import dataclass
 from typing import AsyncIterator
 
-from . import config, documents, ollama, sandbox, settings, web
+from . import config, documents, ollama, sandbox, settings, voice, web
+from .scheduler import scheduler
 from .files import file_path
 from .models import Chat, File
 
 log = logging.getLogger("opti.agent")
 
 CODE_BLOCK = re.compile(r"```python[^\n]*\n(.*?)```", re.S)
-SEARCH_BLOCK = re.compile(r"```(?:recherche|lecture)\n.*?```\n*", re.S)   # encarts d'affichage, retirés de l'historique
+SEARCH_BLOCK = re.compile(r"```(?:recherche|lecture|attente)\n.*?```\n*", re.S)   # encarts d'affichage, retirés de l'historique
 
 ANALYSIS_PROMPT = """
 ## Analyse de fichiers de données
@@ -72,27 +76,81 @@ def build_messages(chat: Chat, files: list[File], prefs: settings.UserPrefs | No
     return [{"role": "system", "content": system}, *history]
 
 
+@dataclass
+class Plan:
+    """Ce qu'il faut faire des documents joints pour cette question (décidé avant de réserver une place)."""
+    question: str = ""
+    search_query: str = ""
+    mode: str = documents.EXTRAITS
+    has_docs: bool = False
+
+    @property
+    def heavy(self) -> bool:
+        return self.has_docs and self.mode != documents.EXTRAITS
+
+
+async def _plan(chat: Chat, docs: list[File], prefs: settings.UserPrefs) -> Plan:
+    if not docs:
+        return Plan()
+    user_msgs = [m.content for m in chat.messages if m.role == "user"]
+    question = user_msgs[-1] if user_msgs else ""
+    search_query = question if len(question) >= 30 or len(user_msgs) < 2 else user_msgs[-2] + " " + question
+    light_limit = max(3000, config.DOC_CHAR_BUDGET // len(docs))
+    mode = documents.EXTRAITS
+    if any(len(f.text) > light_limit for f in docs):              # au moins un document trop long pour tenir en entier
+        mode = await documents.decide_mode(question, documents.conversation_excerpt(chat.messages), prefs.doc_mode)
+    return Plan(question, search_query, mode, True)
+
+
 async def run(chat: Chat, files: list[File], web_mode: str = "auto") -> AsyncIterator[str]:
-    """web_mode : 'auto' (le modèle décide), 'on' (recherche forcée), 'off' (jamais)."""
+    """
+    web_mode : 'auto' (le modèle décide), 'on' (recherche forcée), 'off' (jamais).
+    La génération attend d'avoir une place sur le GPU (voir scheduler.py) : l'agent vocal reste prioritaire.
+    """
+    app = settings.app()
+    prefs = settings.user_prefs(chat.owner_id)
+    docs = [f for f in files if f.kind == "document"]
+    plan = await _plan(chat, docs, prefs)
+
+    job = scheduler.enqueue(chat.owner_id, weight=2 if plan.heavy else 1, heavy=plan.heavy)
+    try:
+        started, shown, announced = time.monotonic(), None, False
+        while not job.started:
+            if time.monotonic() - started > app.queue_timeout_seconds:
+                yield ("\n\n> ⚠️ Le serveur est très sollicité en ce moment (appels en cours ou autres demandes). "
+                       "Réessayez dans quelques minutes.")
+                return
+            state = (scheduler.position(job), voice.calls())
+            if state != shown:                                    # une ligne d'état à chaque changement seulement
+                if not announced:
+                    yield "```attente\n"
+                    announced = True
+                yield json.dumps({"status": "waiting", "position": state[0], "calls": state[1], "heavy": plan.heavy}) + "\n"
+                shown = state
+            try:
+                await asyncio.wait_for(job.event.wait(), 3)
+            except asyncio.TimeoutError:
+                pass
+        if announced:
+            yield json.dumps({"status": "done"}) + "\n```\n\n"
+
+        async for part in _generate(chat, files, web_mode, prefs, plan, docs):
+            yield part
+    finally:
+        scheduler.finish(job)                                     # libère la place, ou quitte la file si on a interrompu
+
+
+async def _generate(chat: Chat, files: list[File], web_mode: str, prefs: settings.UserPrefs,
+                    plan: Plan, docs: list[File]) -> AsyncIterator[str]:
     app = settings.app()
 
     # Documents : entiers s'ils sont courts, sinon lecture ciblée, synthèse ou relevé complet (voir documents.py)
-    prefs = settings.user_prefs(chat.owner_id)
     doc_context, blocks, history_budget = "", [], None
-    docs = [f for f in files if f.kind == "document"]
     if docs:
-        user_msgs = [m.content for m in chat.messages if m.role == "user"]
-        question = user_msgs[-1] if user_msgs else ""
-        search_query = question if len(question) >= 30 or len(user_msgs) < 2 else user_msgs[-2] + " " + question
-        light_limit = max(3000, config.DOC_CHAR_BUDGET // len(docs))
-        mode = documents.EXTRAITS
-        if any(len(f.text) > light_limit for f in docs):          # au moins un document trop long pour tenir en entier
-            mode = await documents.decide_mode(question, documents.conversation_excerpt(chat.messages), prefs.doc_mode)
-        heavy = mode != documents.EXTRAITS
-        budget = config.DOC_FULL_BUDGET if heavy else config.DOC_CHAR_BUDGET
-        history_budget = config.HISTORY_FULL_BUDGET if heavy else None
+        budget = config.DOC_FULL_BUDGET if plan.heavy else config.DOC_CHAR_BUDGET
+        history_budget = config.HISTORY_FULL_BUDGET if plan.heavy else None
         opened = False
-        async for kind, payload in documents.prepare(docs, search_query, question, mode, budget):
+        async for kind, payload in documents.prepare(docs, plan.search_query, plan.question, plan.mode, budget):
             if kind == "context":
                 doc_context = payload
                 continue

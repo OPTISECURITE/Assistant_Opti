@@ -1,18 +1,22 @@
 """Administration : comptes, réglages globaux, modèles disponibles, statistiques."""
+import csv
 import datetime
+import io
 import shutil
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session as DbSession
 
-from . import config, settings
+from . import audit, config, retention, settings
+from .scheduler import scheduler
 from .auth import CurrentUser, current_user, hash_password
 from .db import get_db
 from .files import delete_files_of_chat
-from .models import Chat, File, Message, Session, User, now_ms
+from .models import AuditLog, Chat, File, Message, Session, User, now_ms
 
 MIN_PASSWORD = 12
 
@@ -54,7 +58,7 @@ def list_users(db: DbSession = Depends(get_db)):
 
 
 @router.post("/users", status_code=201)
-def create_user(body: NewUser, db: DbSession = Depends(get_db)):
+def create_user(body: NewUser, request: Request, me: CurrentUser = Depends(require_admin), db: DbSession = Depends(get_db)):
     username = body.username.lower()
     if db.scalar(select(User).where(User.username == username)):
         raise HTTPException(409, "Cet identifiant existe déjà.")
@@ -62,11 +66,12 @@ def create_user(body: NewUser, db: DbSession = Depends(get_db)):
              password_hash=hash_password(body.password), is_admin=body.is_admin)
     db.add(u)
     db.commit()
+    audit.record(db, "user.create", actor=me, target=username, request=request, detail={"admin": body.is_admin})
     return user_row(u, 0)
 
 
 @router.patch("/users/{user_id}")
-def update_user(user_id: str, body: UserUpdate, me: CurrentUser = Depends(require_admin),
+def update_user(user_id: str, body: UserUpdate, request: Request, me: CurrentUser = Depends(require_admin),
                 db: DbSession = Depends(get_db)):
     u = db.get(User, user_id)
     if not u:
@@ -85,11 +90,13 @@ def update_user(user_id: str, body: UserUpdate, me: CurrentUser = Depends(requir
         u.password_hash = hash_password(body.password)
         db.execute(delete(Session).where(Session.user_id == u.id))   # déconnecté partout
     db.commit()
+    changed = {k: (getattr(body, k) if k != "password" else "modifié") for k in body.model_fields_set}   # jamais la valeur du mot de passe
+    audit.record(db, "user.update", actor=me, target=u.username, request=request, detail=changed)
     return user_row(u, db.scalar(select(func.count()).select_from(Chat).where(Chat.owner_id == u.id)))
 
 
 @router.delete("/users/{user_id}", status_code=204)
-def delete_user(user_id: str, me: CurrentUser = Depends(require_admin), db: DbSession = Depends(get_db)):
+def delete_user(user_id: str, request: Request, me: CurrentUser = Depends(require_admin), db: DbSession = Depends(get_db)):
     u = db.get(User, user_id)
     if not u:
         raise HTTPException(404, "Compte introuvable")
@@ -101,8 +108,10 @@ def delete_user(user_id: str, me: CurrentUser = Depends(require_admin), db: DbSe
     for f in db.scalars(select(File).where(File.owner_id == u.id)).all():
         shutil.rmtree(config.FILES_DIR / f.id, ignore_errors=True)
         db.delete(f)
+    username = u.username
     db.delete(u)
     db.commit()
+    audit.record(db, "user.delete", actor=me, target=username, request=request)
 
 
 # ── Réglages globaux ─────────────────────────────────────────────────────────
@@ -112,8 +121,17 @@ def get_app_settings():
 
 
 @router.put("/settings")
-def put_app_settings(body: settings.AppSettings):
-    return settings.save_app(body)
+def put_app_settings(body: settings.AppSettings, request: Request, me: CurrentUser = Depends(require_admin),
+                     db: DbSession = Depends(get_db)):
+    old = settings.app().model_dump()
+    saved = settings.save_app(body)
+    diff = {}
+    for key, new in saved.model_dump().items():
+        if new != old.get(key):
+            diff[key] = "modifiée" if key == "system_prompt" else {"avant": old.get(key), "après": new}
+    if diff:
+        audit.record(db, "settings.update", actor=me, request=request, detail=diff)
+    return saved
 
 
 @router.get("/models")
@@ -171,3 +189,78 @@ def stats(db: DbSession = Depends(get_db)):
         "per_day": [{"day": d, "messages": n} for d, n in sorted(per_day.items())],
         "top_users_30d": [{"name": n, "messages": c} for n, c in top],
     }
+
+
+# ── Charge du GPU ────────────────────────────────────────────────────────────
+@router.get("/load")
+def load():
+    return scheduler.snapshot()
+
+
+# ── Conservation des données ─────────────────────────────────────────────────
+class RetentionPreview(BaseModel):
+    days: int = Field(ge=0, le=3650)
+    keep_pinned: bool = True
+
+
+@router.post("/retention/preview")
+def retention_preview(body: RetentionPreview, db: DbSession = Depends(get_db)):
+    return {"chats": retention.preview(db, body.days, body.keep_pinned)}
+
+
+@router.post("/retention/run")
+def retention_run(request: Request, me: CurrentUser = Depends(require_admin), db: DbSession = Depends(get_db)):
+    out = retention.purge()
+    audit.record(db, "system.retention_run", actor=me, request=request, detail=out)
+    return out
+
+
+# ── Journal d'audit ──────────────────────────────────────────────────────────
+def _audit_query(category: str | None, q: str | None):
+    stmt = select(AuditLog)
+    if category:
+        stmt = stmt.where(AuditLog.action.like(f"{category}.%"))
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where((AuditLog.actor_name.ilike(like)) | (AuditLog.target.ilike(like)) | (AuditLog.action.ilike(like)))
+    return stmt
+
+
+def _audit_row(r: AuditLog) -> dict:
+    return {"id": r.id, "ts": r.ts, "actor": r.actor_name, "action": r.action, "target": r.target,
+            "detail": r.detail, "ip": r.ip}
+
+
+@router.get("/audit")
+def audit_list(category: str | None = Query(default=None, max_length=20), q: str | None = Query(default=None, max_length=100),
+               before: int | None = None, limit: int = Query(default=50, ge=1, le=200), db: DbSession = Depends(get_db)):
+    stmt = _audit_query(category, q)
+    if before:
+        stmt = stmt.where(AuditLog.id < before)
+    rows = db.scalars(stmt.order_by(AuditLog.id.desc()).limit(limit + 1)).all()
+    more = len(rows) > limit
+    rows = rows[:limit]
+    return {"rows": [_audit_row(r) for r in rows], "next": rows[-1].id if more and rows else None,
+            "categories": audit.CATEGORIES}
+
+
+def _csv_safe(value: str) -> str:
+    """Empêche l'exécution de formules quand le fichier est ouvert dans Excel (les cibles et identifiants viennent de saisies)."""
+    return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
+
+
+@router.get("/audit/export.csv")
+def audit_export(request: Request, category: str | None = Query(default=None, max_length=20),
+                 q: str | None = Query(default=None, max_length=100), me: CurrentUser = Depends(require_admin),
+                 db: DbSession = Depends(get_db)):
+    rows = db.scalars(_audit_query(category, q).order_by(AuditLog.id.desc()).limit(100_000)).all()
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["Date", "Acteur", "Action", "Cible", "Détail", "Adresse IP"])
+    for r in rows:
+        w.writerow([datetime.datetime.fromtimestamp(r.ts / 1000).strftime("%d/%m/%Y %H:%M:%S"),
+                    _csv_safe(r.actor_name), r.action, _csv_safe(r.target), _csv_safe(r.detail), r.ip])
+    audit.record(db, "system.audit_export", actor=me, request=request, detail={"rows": len(rows)})
+    name = f"journal-audit-{datetime.date.today().isoformat()}.csv"
+    return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})

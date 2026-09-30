@@ -4,6 +4,7 @@ Assistant Opti — point d'entrée de l'API.
 Lancement (depuis /opt/assistant-opti) :
     venv/bin/uvicorn --app-dir backend app.main:app --host 0.0.0.0 --port 8100
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -11,7 +12,7 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import admin, auth_routes, chats, config, files, me, settings
+from . import admin, auth_routes, chats, config, files, me, retention, scheduler, settings
 from .auth import current_user
 from .db import SessionLocal, init_db
 
@@ -26,7 +27,10 @@ async def lifespan(_: FastAPI):
         n = files.purge_orphans(db)
         if n:
             logging.getLogger("opti").info("%d fichier(s) orphelin(s) supprimé(s)", n)
+    tasks = [asyncio.create_task(scheduler.poll_loop()), asyncio.create_task(retention.loop())]
     yield
+    for t in tasks:
+        t.cancel()
 
 
 app = FastAPI(title="Assistant Opti", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -47,7 +51,8 @@ async def get_config():
     s = settings.app()
     return {"model": s.model, "model_label": s.model_label, "web_enabled": s.web_enabled,
             "uploads_enabled": s.uploads_enabled, "analysis_enabled": s.analysis_enabled,
-            "max_upload_mb": s.max_upload_mb, "idle_timeout_minutes": s.session_idle_minutes}
+            "max_upload_mb": s.max_upload_mb, "idle_timeout_minutes": s.session_idle_minutes,
+            "retention_days": s.retention_days, "retention_keep_pinned": s.retention_keep_pinned}
 
 
 # ── Front ────────────────────────────────────────────────────────────────────

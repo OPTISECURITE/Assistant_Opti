@@ -11,11 +11,11 @@ import shutil
 import unicodedata
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import config, sandbox, settings
+from . import audit, config, sandbox, settings
 from .auth import CurrentUser, current_user
 from .db import get_db
 from .models import File, new_id, now_ms
@@ -124,7 +124,7 @@ async def read_pdf(path: Path, stored_name: str, app) -> tuple[str, dict]:
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 @router.post("", status_code=201)
-async def upload(file: UploadFile, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+async def upload(file: UploadFile, request: Request, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     app = settings.app()
     if not app.uploads_enabled:
         raise HTTPException(403, "Les pièces jointes sont désactivées par l'administrateur.")
@@ -172,6 +172,8 @@ async def upload(file: UploadFile, user: CurrentUser = Depends(current_user), db
 
     db.add(f)
     db.commit()
+    audit.record(db, "file.upload", actor=user, target=filename, request=request,
+                 detail={"size": f.size, "kind": f.kind, **({"pages": file_meta(f).get("pages")} if ext == ".pdf" else {})})
     return file_summary(f)
 
 

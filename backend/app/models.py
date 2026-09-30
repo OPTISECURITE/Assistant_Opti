@@ -111,3 +111,17 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class AuditLog(Base):
+    """Journal d'audit : événements uniquement, jamais le contenu des conversations."""
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[int] = mapped_column(BigInteger, default=now_ms, index=True)
+    actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    actor_name: Mapped[str] = mapped_column(String(200), default="")
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    target: Mapped[str] = mapped_column(String(300), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")      # JSON
+    ip: Mapped[str] = mapped_column(String(64), default="")

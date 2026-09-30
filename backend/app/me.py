@@ -2,12 +2,12 @@
 import json
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import settings
+from . import audit, settings
 from .auth import CurrentUser, current_user
 from .db import get_db
 from .files import delete_files_of_chat
@@ -27,7 +27,7 @@ def put_settings(prefs: settings.UserPrefs, user: CurrentUser = Depends(current_
 
 
 @router.get("/export")
-def export(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+def export(request: Request, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     chats = db.scalars(select(Chat).where(Chat.owner_id == user.id).order_by(Chat.created_at)).all()
     files = db.scalars(select(File).where(File.owner_id == user.id, File.chat_id.is_not(None))).all()
     names: dict[str, list[str]] = {}
@@ -44,6 +44,7 @@ def export(user: CurrentUser = Depends(current_user), db: Session = Depends(get_
                           "contenu": m.content, "fichiers": names.get(m.id, [])} for m in c.messages],
         } for c in chats],
     }
+    audit.record(db, "data.export", actor=user, request=request, detail={"chats": len(chats)})
     body = json.dumps(data, ensure_ascii=False, indent=2)
     filename = f"assistant-opti-{user.username}-{time.strftime('%Y%m%d')}.json"
     return Response(body, media_type="application/json",
@@ -51,8 +52,10 @@ def export(user: CurrentUser = Depends(current_user), db: Session = Depends(get_
 
 
 @router.delete("/chats", status_code=204)
-def delete_all(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    for chat in db.scalars(select(Chat).where(Chat.owner_id == user.id)).all():
+def delete_all(request: Request, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    chats = db.scalars(select(Chat).where(Chat.owner_id == user.id)).all()
+    for chat in chats:
         delete_files_of_chat(db, chat.id)
         db.delete(chat)
     db.commit()
+    audit.record(db, "data.delete_all", actor=user, request=request, detail={"chats": len(chats)})

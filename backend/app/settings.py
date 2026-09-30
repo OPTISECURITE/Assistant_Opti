@@ -33,6 +33,16 @@ class AppSettings(BaseModel):
     analysis_enabled: bool = True
     max_analysis_steps: int = Field(default=config.MAX_ANALYSIS_STEPS, ge=1, le=5)
     sandbox_timeout: int = Field(default=config.SANDBOX_TIMEOUT, ge=10, le=300)
+    # Charge : le GPU est partagé avec l'agent vocal (voir scheduler.py)
+    ollama_slots: int = Field(default=8, ge=1, le=64)               # OLLAMA_NUM_PARALLEL du serveur
+    voice_reserve: int = Field(default=1, ge=0, le=8)               # places gardées en plus des appels en cours
+    max_assistant_slots: int = Field(default=4, ge=1, le=32)        # places que l'assistant peut prendre au maximum
+    max_per_user: int = Field(default=2, ge=1, le=8)                # places simultanées d'un même utilisateur
+    queue_timeout_seconds: int = Field(default=300, ge=30, le=3600) # attente maximale avant d'abandonner
+    # Conservation des données (RGPD)
+    retention_days: int = Field(default=0, ge=0, le=3650)           # conversations supprimées après N jours d'inactivité (0 = jamais)
+    retention_keep_pinned: bool = True                              # les conversations épinglées sont conservées
+    audit_retention_days: int = Field(default=365, ge=30, le=3650)  # durée de conservation du journal d'audit
     # Sécurité des sessions
     session_idle_minutes: int = Field(default=30, ge=5, le=1440)   # déconnexion après inactivité
     session_max_hours: int = Field(default=12, ge=1, le=720)       # durée maximale d'une session, activité comprise

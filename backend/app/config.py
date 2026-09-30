@@ -63,3 +63,7 @@ PDF_TIMEOUT = int(os.getenv("OPTI_PDF_TIMEOUT", "300"))       # durée maximale 
 DOC_FULL_BUDGET = int(os.getenv("OPTI_DOC_FULL_BUDGET", "28000"))
 HISTORY_FULL_BUDGET = int(os.getenv("OPTI_HISTORY_FULL_BUDGET", "6000"))
 MAX_SECTIONS = int(os.getenv("OPTI_MAX_SECTIONS", "120"))   # sections lues au maximum par document
+
+# Ports du STT et du TTS de l'agent vocal : le nombre de connexions ouvertes dessus donne le nombre d'appels en cours
+VOICE_PORTS = os.getenv("OPTI_VOICE_PORTS", "8080,8089")
+VOICE_CONNS_PER_CALL = max(1, int(os.getenv("OPTI_VOICE_CONNS_PER_CALL", "1")))   # connexions ouvertes par appel sur chacun de ces ports

@@ -117,3 +117,23 @@ Variables : `OPTI_MAX_PDF_PAGES` (300), `OPTI_PDF_TIMEOUT` (300 s), `OPTI_DOC_FU
   signal de présence (`POST /api/auth/ping`) au plus une fois par minute quand l'écran est utilisé, ou pendant qu'une réponse se génère.
   Une session inactive est refusée par le serveur même si l'onglet est resté ouvert ou a été fermé puis rouvert.
 - Les nouveaux délais s'appliquent immédiatement, y compris aux sessions déjà ouvertes.
+
+## Charge du GPU : priorité à l'agent vocal
+
+`backend/app/scheduler.py` répartit les places d'Ollama : `places de l'assistant = places d'Ollama - appels en cours - réserve`
+(au moins 1, au plus le plafond). Les appels en cours sont comptés par les connexions ouvertes sur le STT et le TTS de l'agent
+vocal (`OPTI_VOICE_PORTS`, `OPTI_VOICE_CONNS_PER_CALL`), sans rien modifier dans l'agent. Les demandes qui ne passent pas attendent
+en file avec un message (position, appels en cours) ; un même utilisateur ne prend pas plus de `max_per_user` places. La lecture
+complète d'un long document compte pour 2 places. Réglages et état en direct : Administration → Charge.
+
+Vérification : pendant un appel de test, `ss -tn state established '( sport = :8080 or sport = :8089 )'` doit montrer les
+connexions, et l'onglet Charge doit afficher « 1 appel en cours ».
+
+## Conservation des données et journal d'audit
+
+- **Conservation** (Administration → Sécurité) : suppression des conversations inactives après N jours (0 = jamais), avec leurs
+  fichiers ; les épinglées peuvent être conservées. Contrôle toutes les heures ; l'aperçu indique combien de conversations une
+  règle supprimerait avant de l'enregistrer.
+- **Journal d'audit** (Administration → Journal) : connexions (réussies, échouées, blocages), comptes, réglages, messages envoyés
+  (sans leur texte), fichiers déposés, exports, purges. Jamais le contenu des conversations, ni un mot de passe (un mot de passe
+  tapé dans le champ identifiant est masqué). Export CSV (formules neutralisées). Conservé `audit_retention_days` jours (365 par défaut).
