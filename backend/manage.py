@@ -170,6 +170,7 @@ def test_sandbox():
             ("Fichier en lecture seule", "open('/data/test.csv', 'a').write('x')\nprint('ECRITURE POSSIBLE')", False, None),
             ("Pas de privilèges root", "import os\nprint('uid', os.getuid())", True, "uid 10001"),
             ("Pas d'accès aux données de l'application", "import os\nprint(os.path.exists('/opt/assistant-opti'))", True, "False"),
+            ("Lecteur Excel rapide (calamine)", "import python_calamine\nprint('calamine ok')", True, "calamine ok"),
         ]
         pdf_ok, ocr_ok = test_pdf(tmp)
         chart_ok = test_chart()

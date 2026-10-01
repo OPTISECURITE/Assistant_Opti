@@ -36,7 +36,9 @@ Tu ne vois qu'un aperçu : pour tout chiffre, comptage, statistique, filtre ou e
 - Arrête-toi juste après le bloc : le code sera exécuté et tu recevras sa sortie.
 - Ensuite, rédige ta réponse en français en t'appuyant UNIQUEMENT sur les résultats obtenus. N'invente jamais un chiffre.
 - En cas d'erreur, corrige le code et réessaie.
-- Lis chaque fichier EXACTEMENT avec la commande indiquée dans son profil (« Pour lire ce fichier »).
+- Lis chaque fichier EXACTEMENT avec la commande indiquée dans son profil (« Pour lire ce fichier »). Pour un classeur Excel, garde l'option engine="calamine" : elle est beaucoup plus rapide et tolère les fichiers un peu fautifs.
+- Les noms de colonnes sont donnés exactement, entre guillemets : ils peuvent contenir des retours à la ligne (\n) ou des espaces en trop. Pour éviter les erreurs, commence par les normaliser : df.columns = [" ".join(str(c).split()) for c in df.columns] (les colonnes « Unnamed: n » sont des colonnes sans titre, souvent vides : ignore-les).
+- Le fichier peut être très volumineux (des centaines de milliers de lignes) : n'affiche jamais le tableau entier, utilise des agrégats (groupby, value_counts, sum, head).
 """
 
 
@@ -135,7 +137,7 @@ def build_messages(chat: Chat, files: list[File], prefs: settings.UserPrefs | No
     if data:
         system += ANALYSIS_PROMPT + OUTPUT_HELP
         for f in data:
-            system += f"\n### Fichier de données « {f.filename} » → /data/{f.stored_name}\n{f.text[:4000]}\n"
+            system += f"\n### Fichier de données « {f.filename} » → /data/{f.stored_name}\n{f.text[:6000]}\n"
     elif code_mode == "chart":
         system += CHART_PROMPT
     if has_tools:

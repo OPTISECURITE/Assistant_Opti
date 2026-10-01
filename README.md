@@ -192,3 +192,12 @@ Limites de cette version : consultation seule ; un seul compte de service par co
 pas par les droits propres de chaque utilisateur dans le système distant) ; les outils ne sont pas proposés dans les réponses de
 rédaction de document ni pendant l'analyse d'un fichier de données.
 HTTPS interne : renseigner `OPTI_CA_BUNDLE` (certificat de l'autorité interne) dans `.env`.
+
+### Classeurs Excel (même fautifs, même très gros)
+
+Le code d'analyse lit les classeurs avec **calamine** (lecteur rapide, indifférent aux styles, installé dans l'image du bac à sable) :
+255 000 lignes × 34 colonnes se lisent en ~10 s, contre plusieurs minutes avec openpyxl. `pd.read_excel` est enveloppé
+(`sandbox.EXCEL_COMPAT`) : calamine d'abord, lecteur habituel en repli, et openpyxl corrige ou ignore les attributs inconnus
+(cas réel : `biltinId` au lieu de `builtinId` dans `styles.xml`, qui faisait planter la lecture). Le profil donné au modèle liste les noms
+de colonnes exacts (retours à la ligne compris) et la commande de lecture à utiliser. Sans l'image à jour (calamine absent), seule la
+tolérance joue : suffisante pour un petit classeur, trop lente pour un gros.

@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import resource
 import sys
 import uuid
@@ -157,7 +158,8 @@ async def _execute(code: str, files: list[tuple[Path, str]], timeout: int, max_b
 
 
 def _wrap(code: str, out_dir: str) -> str:
-    return (OUTPUT_WRAPPER.replace("__USER_CODE__", repr(code)).replace("__OUT_DIR__", repr(out_dir))
+    prelude = EXCEL_COMPAT if re.search(r"read_excel|ExcelFile|openpyxl|xlsx", code) else ""
+    return (prelude + OUTPUT_WRAPPER.replace("__USER_CODE__", repr(code)).replace("__OUT_DIR__", repr(out_dir))
             .replace("__EXTENSIONS__", repr(sorted(OUTPUT_TYPES))))
 
 
@@ -274,24 +276,78 @@ async def run_analysis(code: str, files: list[tuple[Path, str]]) -> tuple[bool, 
     return returncode == 0, _truncate(text), produced
 
 
+# ── Lecture tolérante des classeurs Excel ───────────────────────────────────────────────────────────────────
+# Certains logiciels écrivent des classeurs un peu fautifs (par exemple « biltinId » au lieu de « builtinId » dans les styles) : Excel
+# les ouvre, mais openpyxl plante. Et un gros classeur (des centaines de milliers de lignes) est très lent à lire avec openpyxl.
+# On corrige donc deux choses dans le code exécuté : (1) openpyxl ignore ou corrige les attributs inconnus ; (2) pd.read_excel utilise
+# d'abord « calamine » (lecteur rapide qui ignore les styles) quand il est installé, et retombe sur le lecteur habituel sinon.
+EXCEL_COMPAT = r"""
+try:
+    import difflib as _dl
+    from openpyxl.descriptors.serialisable import Serialisable as _S
+    _ft = _S.from_tree.__func__
+    def _tolerant(cls, node):
+        try:
+            return _ft(cls, node)
+        except TypeError:
+            attrs = list(getattr(cls, "__attrs__", ()) or ())
+            for key in list(node.attrib):
+                if key.startswith("{") or key in attrs:
+                    continue
+                value = node.attrib.pop(key)
+                close = _dl.get_close_matches(key, attrs, n=1, cutoff=0.8)     # « biltinId » → « builtinId »
+                if close and close[0] not in node.attrib:
+                    node.attrib[close[0]] = value
+            return _ft(cls, node)
+    _S.from_tree = classmethod(_tolerant)
+except Exception:
+    pass
+try:
+    import pandas as _pd
+    _read_excel = _pd.read_excel
+    def _robust_read_excel(*args, **kwargs):
+        if kwargs.get("engine") is None:
+            try:
+                import python_calamine
+                return _read_excel(*args, **dict(kwargs, engine="calamine"))
+            except Exception:
+                pass
+        return _read_excel(*args, **kwargs)
+    _pd.read_excel = _robust_read_excel
+except Exception:
+    pass
+"""
+
 # ── Profil d'un fichier de données (code fixe, exécuté lui aussi dans le bac à sable) ──
-PROFILE_CODE = r'''
+PROFILE_CODE = r"""
 import pandas as pd
 pd.set_option("display.width", 200); pd.set_option("display.max_columns", 40)
-path = "/data/{name}"
+path = "/data/__NAME__"
+
 def show(df, label):
-    print(f"{{label}}{{len(df)}} lignes x {{len(df.columns)}} colonnes")
-    print("Colonnes et types :")
+    print(f"{label}{len(df)} lignes x {len(df.columns)} colonnes")
+    print("Colonnes et types (noms EXACTS, entre guillemets ; \\n = retour à la ligne dans le nom) :")
     for c in df.columns:
-        print(f"  - {{c}} : {{df[c].dtype}} ({{df[c].isna().sum()}} vides)")
+        print(f"  - {c!r} : {df[c].dtype} ({int(df[c].isna().sum())} vides)")
     print("Premières lignes :")
-    print(df.head(5).to_string(max_colwidth=40))
+    print(df.head(3).to_string(max_colwidth=24))
+
 if path.lower().endswith((".xlsx", ".xlsm")):
-    sheets = pd.read_excel(path, sheet_name=None)
-    print(f"Classeur Excel, {{len(sheets)}} feuille(s) : {{', '.join(sheets)}}")
-    print(f'Pour lire ce fichier : pd.read_excel("{{path}}", sheet_name="<nom de la feuille>")')
-    for s, df in list(sheets.items())[:5]:
-        print(); show(df, f"Feuille « {{s}} » : ")
+    try:
+        import python_calamine
+        engine = "calamine"         # lecteur rapide, indifférent aux styles : indispensable pour un gros classeur
+    except ImportError:
+        engine = None
+    xl = pd.ExcelFile(path, engine=engine) if engine else pd.ExcelFile(path)
+    names = xl.sheet_names
+    print(f"Classeur Excel, {len(names)} feuille(s) : {', '.join(names)}")
+    print('Pour lire ce fichier : pd.read_excel("' + path + '", sheet_name="<nom de la feuille>"' + (', engine="calamine"' if engine else '') + ')')
+    for s in names[:5]:
+        df = xl.parse(s)             # une feuille à la fois : la mémoire n'est jamais celle de tout le classeur
+        print(); show(df, f"Feuille « {s} » : ")
+        del df
+    if len(names) > 5:
+        print(f"\n(Autres feuilles non détaillées : {', '.join(names[5:])})")
 else:
     best = None
     for enc in ("utf-8-sig", "latin-1"):
@@ -307,15 +363,15 @@ else:
     if best is None:
         raise SystemExit("Impossible de lire ce CSV.")
     df, sep, enc = best
-    print(f'Pour lire ce fichier : pd.read_csv("{{path}}", sep={{sep!r}}, encoding={{enc!r}}, low_memory=False)')
+    print('Pour lire ce fichier : pd.read_csv("' + path + '", sep=' + repr(sep) + ', encoding=' + repr(enc) + ', low_memory=False)')
     show(df, "")
-'''
+"""
 
 
 async def profile_data_file(host_path: Path, stored_name: str) -> str:
-    ok, out = await run_code(PROFILE_CODE.format(name=stored_name), [(host_path, stored_name)])
+    code = EXCEL_COMPAT + PROFILE_CODE.replace("__NAME__", stored_name)
+    ok, out = await run_code(code, [(host_path, stored_name)], timeout=max(settings.app().sandbox_timeout, 120))
     return out if ok else f"Profil indisponible : {out[-500:]}"
-
 
 
 # ── Lecture d'un PDF (texte, tableaux, OCR des pages scannées) ────────────────
